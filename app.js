@@ -532,4 +532,535 @@ function abrirDetalle(ot_id){
   if(ot.actas&&ot.actas.length){
     ac.className="";ac.innerHTML="";
     ot.actas.forEach(function(a){ac.innerHTML+='<div style="display:flex;align-items:center;gap:0.5rem;background:var(--bg-hover);padding:0.5rem;border-radius:var(--radius-sm);margin-bottom:0.25rem;border:1px solid var(--border-color);"><span style="font-size:1rem;">'+fIco(a.nombre)+'</span><span style="flex:1;font-size:0.75rem;font-family:var(--font-mono)">'+esc(a.nombre)+'</span><a href="'+esc(a.url)+'" target="_blank" class="btn bgh" style="font-size:0.75rem;padding:4px 8px;">Ver</a></div>'})
-  } else {ac.className="lst-st";ac.
+  } else {ac.className="lst-st";ac.textContent="Sin actas adjuntas"}
+  if(ot.sede) cargarEquiposSede(ot.sede, function(){});
+  dpTab(1);document.getElementById("detOv").classList.add("open");
+}
+
+function dpTab(n){ [1,2,3].forEach(function(i){document.getElementById("dp"+i).style.display=i===n?"block":"none";document.getElementById("pt"+i).classList.toggle("on",i===n)}); if(n===2) cargarCotDP(); }
+
+function cargarCotDP(){
+  if(!currentEditOT)return;
+  document.getElementById("dp2ld").style.display="block"; document.getElementById("dp2wr").style.display="none";
+  var sede = currentEditOT.sede || "";
+  cargarUbicMecanicos(sede, function(){});
+  cargarEquiposSede(sede, function(){
+    gsr("getItemsOT", currentEditOT.ot_id,
+      function(items){
+        document.getElementById("dp2ld").style.display="none"; document.getElementById("dp2wr").style.display="block";
+        var tbody=document.getElementById("dpTbody"); tbody.innerHTML="";
+        if(Array.isArray(items)) items.forEach(function(it){ dpAddFila(it); });
+        dpCalcT();
+      }, function(){ document.getElementById("dp2ld").style.display="none"; document.getElementById("dp2wr").style.display="block"; }
+    );
+  });
+}
+
+function dpAddFila(item){
+  item=item||{}; var tbody=document.getElementById("dpTbody"), tr=document.createElement("tr");
+  var eqOpts=buildEquipoOpts(item.categoria||"", item.ubicacion||"", item.equipo_cod||"");
+  var ubicHtmlDp='<input class="dp-fi ubic-in" value="'+esc(item.ubicacion||"")+'" onchange="onUbicChange(this)">';
+  tr.innerHTML=
+    '<td><select class="dp-fi csel" onchange="onCC(this,true)">'+bCO(item.categoria)+'</select></td>'+
+    '<td><select class="dp-fi tsel">'+bTO(item.categoria,item.tipo)+'</select></td>'+
+    '<td><select class="dp-fi">'+bLO(item.labor)+'</select></td>'+
+    '<td><input class="dp-fi" value="'+esc(item.descripcion||"")+'"></td>'+
+    '<td class="ubic-td">'+ubicHtmlDp+'</td>'+
+    '<td><select class="dp-fi eq-sel" onchange="onEquipoChange(this)">'+eqOpts+'</select></td>'+
+    '<td><input class="dp-fi mn" data-rol="cant" value="'+(item.cantidad||"")+'" type="number" step="0.01" oninput="dpCalcT()"></td>'+
+    '<td><input class="dp-fi mn" data-rol="prec" value="'+(item.precio||"")+'" type="number" step="0.01" oninput="dpCalcT()"></td>'+
+    '<td><div class="tl" data-tl style="font-family:var(--font-mono);font-size:0.875rem;text-align:right;">$ 0.00</div></td>'+
+    '<td style="text-align:center"><button class="btn brd" style="padding:4px;" onclick="dpDelF(this)">✕</button></td>';
+  tbody.appendChild(tr);dpCalcT();
+  if(item.categoria && (item.categoria.toLowerCase().indexOf("invernadero")>=0 || item.categoria.toLowerCase().indexOf("mec")>=0)){ actualizarUbicCell(tr, item.categoria, item.ubicacion||"", true); }
+}
+function dpDelF(btn){btn.closest("tr").remove();dpCalcT()}
+function dpCalcT(){
+  var rows=document.querySelectorAll("#dpTbody tr"),sub=0;
+  var fmt2=function(n){return"$ "+n.toLocaleString("es-CO",{minimumFractionDigits:2,maximumFractionDigits:2})};
+  rows.forEach(function(r){
+    var cant=r.querySelector("[data-rol='cant']"), prec=r.querySelector("[data-rol='prec']");
+    var c=parseFloat(cant?cant.value:0)||0, p=parseFloat(prec?prec.value:0)||0, ln=c*p; sub+=ln;
+    var tl=r.querySelector("[data-tl]"); if(tl)tl.textContent=fmt2(ln);
+  });
+  var el=document.getElementById("dpTot"); if(el)el.textContent=fmt2(sub);
+}
+
+function guardarEdicion(){
+  if(!currentEditOT)return;
+  var ot_id=document.getElementById("de_otid").value.trim();
+  var datos={ot_id_original:currentEditOT.ot_id,ot_id:ot_id,fecha:document.getElementById("de_fecha").value,empresa:document.getElementById("de_emp").value.trim(),sede:document.getElementById("de_sede").value.trim(),clasificacion:document.getElementById("de_clas").value.trim(),precio_total:document.getElementById("de_ptot").value||"0",centro_costos:document.getElementById("de_cc").value.trim(),estado:document.getElementById("de_est").value,observaciones:document.getElementById("de_obs").value.trim()};
+  var dpRows=document.querySelectorAll("#dpTbody tr"),items=[];
+  dpRows.forEach(function(r){
+    var ins=r.querySelectorAll("input"), catS=r.querySelector(".csel"), tipS=r.querySelector(".tsel"), labS=r.querySelectorAll("select")[2];
+    var eqData=getEquipoSelData(r);
+    items.push({ot_id:ot_id, categoria:catS?catS.value:"", tipo:tipS?tipS.value:"", labor:labS?labS.value:"", descripcion:ins[0]?ins[0].value.trim():"", ubicacion:getUbicVal(r).trim(), cantidad:(r.querySelector("[data-rol='cant']")||{value:"0"}).value||"0", precio:(r.querySelector("[data-rol='prec']")||{value:"0"}).value||"0", equipo_cod:eqData.codigo, equipo_desc:eqData.descripcion, sede:currentEditOT?currentEditOT.sede:"", centro_costos:currentEditOT?currentEditOT.centro_costos:"", empresa:currentEditOT?currentEditOT.empresa:"", fecha_ot:currentEditOT?currentEditOT.fecha:""})
+  });
+  setB("btnSE","sp3","bSEt",true,"Guardando…");
+  gsr("saveEditarOT",datos,
+    function(res){
+      if(items.length){gsr("saveDetalle",{items:items,ot_id:ot_id},function(){toast("✅ Guardado","ok2");closeDetail();cargarRegs();cargarAnalitica();setB("btnSE","sp3","bSEt",false,"💾 Guardar Cambios")},function(err){toast("❌ "+err.message,"err2");setB("btnSE","sp3","bSEt",false,"💾 Guardar Cambios")})}
+      else{toast("✅ OT actualizada","ok2");closeDetail();cargarRegs();setB("btnSE","sp3","bSEt",false,"💾 Guardar Cambios")}
+    }, function(err){toast("❌ "+err.message,"err2");setB("btnSE","sp3","bSEt",false,"💾 Guardar Cambios")}
+  );
+}
+function closeDetail(){document.getElementById("detOv").classList.remove("open");currentEditOT=null;document.getElementById("dpTbody").innerHTML=""}
+
+// ═══ ANALÍTICA / DASHBOARD SCRIPT ════════════════
+var M2 = { "OLAS": 325000, "MANANTIALES": 160000 };
+var sedeActiva = "", catActiva = "", invTipoActivo = "";
+var atabActivo = 1;
+
+function setSede(sede){
+  sedeActiva = sede;
+  ["anSedeTodo","anSedeOlas","anSedeMant"].forEach(function(id){ var b=document.getElementById(id); if(b) b.classList.remove("on"); });
+  var btnId = sede===""?"anSedeTodo":sede==="OLAS"?"anSedeOlas":"anSedeMant";
+  var btn=document.getElementById(btnId); if(btn) btn.classList.add("on");
+  renderDashboard();
+}
+function setInvTipo(tipo){
+  invTipoActivo = tipo;
+  ["invTipo0","invTipo1","invTipo2","invTipo3"].forEach(function(id){ var b=document.getElementById(id); if(b) b.classList.remove("on"); });
+  var idx = tipo===""?"0":tipo==="cambio"?"1":tipo==="lavado"?"2":"3";
+  var btn=document.getElementById("invTipo"+idx); if(btn) btn.classList.add("on");
+  renderDashboard();
+}
+function onCatChange(){
+  catActiva = (document.getElementById("anCat")||{value:""}).value;
+  var invF = document.getElementById("invTipoFiltro");
+  if(invF) invF.style.display = catActiva.toLowerCase().indexOf("invernadero")>=0?"block":"none";
+  renderDashboard();
+}
+function goAtab(n){
+  [1,2,3].forEach(function(i){
+    document.getElementById("as"+i).style.display = i===n?"block":"none";
+    var btn = document.getElementById("at"+i); if(btn) btn.classList.toggle("on", i===n);
+  });
+  atabActivo = n;
+  if(n===1 && (otData.length||costoData.length)) setTimeout(renderCharts,80);
+  if(n===2){ cargarInvernaderos(); cargarCostosInv(); }
+  if(n===3) cargarEquiposAnalitica();
+}
+
+function cargarAnalitica(){
+  gsr("getAnalitica",null,function(data){
+    otData=data.ots||[];costoData=data.costos||[];
+    poblarFiltros(); renderDashboard(); poblarCatFiltro();
+  },function(){});
+}
+
+function poblarFiltros(){
+  var nomMes=["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
+  var anios=uniq(otData.map(function(o){return(o.fecha||"").substring(0,4)}).filter(Boolean)).sort().reverse();
+  var emps =uniq(otData.map(function(o){return o.empresa}).filter(Boolean)).sort();
+  var cats =uniq(costoData.map(function(c){return c.categoria}).filter(Boolean)).sort();
+  var sa=document.getElementById("afAnio"); if(sa){sa.innerHTML='<option value="">Año</option>';anios.forEach(function(a){sa.innerHTML+='<option>'+a+'</option>';});}
+  var sm=document.getElementById("afMes"); if(sm){sm.innerHTML='<option value="">Mes</option>'; ["01","02","03","04","05","06","07","08","09","10","11","12"].forEach(function(m,i){ sm.innerHTML+='<option value="'+m+'">'+nomMes[i]+'</option>'; }); }
+  var se=document.getElementById("afEmp"); if(se){se.innerHTML='<option value="">Empresa</option>';emps.forEach(function(e){se.innerHTML+='<option>'+e+'</option>';});}
+  var ac=document.getElementById("anCat"); if(ac){ var cur=ac.value; ac.innerHTML='<option value="">📊 Categoría</option>'; cats.forEach(function(c){ac.innerHTML+='<option value="'+esc(c)+'">'+esc(c)+'</option>';}); if(cur) ac.value=cur; }
+  poblarFiltrosCC();
+}
+
+function getDatos(){
+  var anio=(document.getElementById("afAnio")||{value:""}).value, mes=(document.getElementById("afMes")||{value:""}).value, emp=(document.getElementById("afEmp")||{value:""}).value, estOT=(document.getElementById("afEstOT")||{value:""}).value;
+  var ots2=otData.filter(function(o){
+    if(sedeActiva && (o.sede||"").toUpperCase()!==sedeActiva) return false;
+    if(anio && !(o.fecha||"").startsWith(anio)) return false;
+    if(mes && (o.fecha||"").substring(5,7)!==mes) return false;
+    if(emp && o.empresa!==emp) return false;
+    if(estOT && o.estado!==estOT) return false;
+    return true;
+  });
+  var ids=new Set(ots2.map(function(o){return o.ot_id;}));
+  var cos2=costoData.filter(function(c){
+    if(!ids.has(c.ot_id)) return false;
+    if(catActiva && c.categoria!==catActiva) return false;
+    if(invTipoActivo){
+      var t=(c.tipo||"").toLowerCase();
+      if(invTipoActivo==="cambio" && !t.includes("cambio")) return false;
+      if(invTipoActivo==="lavado" && !t.includes("lavado")) return false;
+      if(invTipoActivo==="otros" && (t.includes("cambio")||t.includes("lavado"))) return false;
+    }
+    return true;
+  });
+  return {ots:ots2, costos:cos2};
+}
+
+function renderDashboard(){
+  var d = getDatos();
+  var cat = catActiva.toLowerCase(), esInv = cat.indexOf("invernadero")>=0, esMec = cat.indexOf("mec")>=0, esTodas = catActiva==="";
+  
+  var secTodas = document.getElementById("secTodas"), secMec = document.getElementById("secMecanicos"), secInv = document.getElementById("secInvernaderos"), secRV = document.getElementById("secRadarVol"), sedesP = document.getElementById("sedesPanel");
+  if(secTodas) secTodas.style.display = esTodas?"block":"none";
+  if(secMec) secMec.style.display = esMec?"block":"none";
+  if(secInv) secInv.style.display = esInv?"block":"none";
+  if(secRV) secRV.style.display = esTodas?"block":"none";
+  if(sedesP) sedesP.style.display = (sedeActiva===""&&esTodas)?"block":"none";
+
+  renderKPIs(d.ots, d.costos); renderM2Panel(d.costos);
+  chMes(d.costos); chEmp(d.ots, d.costos);
+
+  if(esTodas){ chSedes(); chCat(d.costos); chTipo(d.costos); chEst(d.ots); chLab(d.costos); chTop(d.ots, d.costos); chRadar(d.costos); chVol(d.ots); }
+  if(esMec) renderSecMecanicos(d.costos);
+  if(esInv) renderSecInvernaderos(d.costos);
+
+  renderChCC(); renderPresupInversion();
+}
+function renderCharts(){ renderDashboard(); }
+
+function renderKPIs(ots,cos){
+  var tot=cos.reduce(function(a,c){return a+(parseFloat(c.total_linea)||0)},0);
+  var pend=ots.filter(function(o){return o.estado==="PENDIENTE"}).length;
+  var proc=ots.filter(function(o){return o.estado==="EN PROCESO"}).length;
+  var cerr=ots.filter(function(o){return o.estado==="CERRADO"}).length;
+  var pm=ots.length?tot/ots.length:0;
+  var porMes={};cos.forEach(function(c){var m=(c.fecha||"").substring(0,7);if(m)porMes[m]=(porMes[m]||0)+(parseFloat(c.total_linea)||0);});
+  var mc=Object.keys(porMes).sort(function(a,b){return porMes[b]-porMes[a]})[0]||"—";
+  var ctop={};cos.forEach(function(c){if(c.categoria)ctop[c.categoria]=(ctop[c.categoria]||0)+(parseFloat(c.total_linea)||0);});
+  var cm=Object.keys(ctop).sort(function(a,b){return ctop[b]-ctop[a]})[0]||"—";
+
+  var m2Sede = sedeActiva ? (M2[sedeActiva]||1) : (M2["OLAS"]+M2["MANANTIALES"]);
+  var costoM2 = tot/m2Sede;
+
+  var kpis=[
+    {ico:"💰",val:fmtCOP(tot),lbl:"Gasto Total",sub:ots.length+" órdenes",cls:"blue"},
+    {ico:"📐",val:fmtCOP(Math.round(costoM2)),lbl:"Costo/m²",sub:sedeActiva||(catActiva||"Todas"),cls:"cyan"},
+    {ico:"⏳",val:pend,lbl:"Pendientes",sub:"Por ejecutar",cls:"warn"},
+    {ico:"🔄",val:proc,lbl:"En Proceso",sub:"En ejecución",cls:"purple"},
+    {ico:"✅",val:cerr,lbl:"Cerradas",sub:"Completadas",cls:"green"},
+    {ico:"📊",val:fmtCOP(pm),lbl:"Ticket Promedio",sub:"Por OT",cls:"pink"},
+    {ico:"📅",val:mc,lbl:"Mes Peak",sub:porMes[mc]?fmtCOP(porMes[mc]):"—",cls:"orange"},
+    {ico:"🏷",val:cm,lbl:"Top Categoría",sub:ctop[cm]?fmtCOP(ctop[cm]):"—",cls:"blue"}
+  ];
+  var el=document.getElementById("kpiGrid");
+  if(el){el.innerHTML="";kpis.forEach(function(k){el.innerHTML+='<div class="kpi '+k.cls+'"><div class="kpi-ico">'+k.ico+'</div><div class="kpi-val">'+k.val+'</div><div class="kpi-lbl">'+k.lbl+'</div><div class="kpi-sub">'+k.sub+'</div></div>';});}
+}
+
+function renderM2Panel(costos){
+  var panel=document.getElementById("m2Panel"); if(!panel) return;
+  if(!sedeActiva){ panel.style.display="none"; return; }
+  panel.style.display="block";
+  var m2=M2[sedeActiva]||1, tot=costos.reduce(function(a,c){return a+(parseFloat(c.total_linea)||0)},0), byCat={};
+  costos.forEach(function(c){if(c.categoria)byCat[c.categoria]=(byCat[c.categoria]||0)+(parseFloat(c.total_linea)||0);});
+  document.getElementById("m2Sub").textContent=sedeActiva+" · "+m2.toLocaleString("es-CO")+" m²";
+  var grid=document.getElementById("m2Grid"); if(!grid) return;
+  grid.innerHTML='<div class="kpi blue"><div class="kpi-ico">📐</div><div class="kpi-val">'+fmtCOP(Math.round(tot/m2))+'</div><div class="kpi-lbl">Costo/m² Total</div><div class="kpi-sub">'+fmtCOP(tot)+'</div></div>';
+  var cls=["green","warn","purple","cyan","pink","orange"];
+  Object.keys(byCat).sort().forEach(function(cat,i){
+    var t=byCat[cat],cm2=t/m2;
+    grid.innerHTML+='<div class="kpi '+cls[i%6]+'"><div class="kpi-ico">📐</div><div class="kpi-val">'+fmtCOP(Math.round(cm2))+'</div><div class="kpi-lbl">'+esc(cat)+'</div><div class="kpi-sub">'+fmtCOP(t)+'</div></div>';
+  });
+}
+
+function renderSecMecanicos(costos){
+  var isLight=!document.body.classList.contains("dark"), tc=isLight?"#64748b":"#94a3b8", gc=isLight?"#e2e8f0":"#334155";
+  var mapa={};
+  costos.forEach(function(c){
+    var key = c.equipo_cod?(c.equipo_cod+(c.equipo_desc?" — "+c.equipo_desc:"")):(c.descripcion||"Sin equipo");
+    if(!key.trim()) return;
+    if(!mapa[key]) mapa[key]={costo:0,count:0};
+    mapa[key].costo+=parseFloat(c.total_linea)||0; mapa[key].count+=1;
+  });
+  var sorted=Object.keys(mapa).sort(function(a,b){return mapa[b].costo-mapa[a].costo}).slice(0,15);
+  if(charts["chEqCostoG"]) charts["chEqCostoG"].destroy();
+  var ctx1=document.getElementById("chEqCostoG");
+  if(ctx1) charts["chEqCostoG"]=new Chart(ctx1,{type:"bar",data:{labels:sorted,datasets:[{data:sorted.map(function(k){return mapa[k].costo}),backgroundColor:CL,borderRadius:6}]},options:{responsive:true,maintainAspectRatio:false,indexAxis:"y",plugins:{legend:{display:false}},scales:{x:{grid:{color:gc},ticks:{color:tc,callback:function(v){return fmtK(v)}}},y:{ticks:{color:tc}}}}});
+  var sortedC=Object.keys(mapa).sort(function(a,b){return mapa[b].count-mapa[a].count}).slice(0,15);
+  if(charts["chEqCountG"]) charts["chEqCountG"].destroy();
+  var ctx2=document.getElementById("chEqCountG");
+  if(ctx2) charts["chEqCountG"]=new Chart(ctx2,{type:"bar",data:{labels:sortedC,datasets:[{data:sortedC.map(function(k){return mapa[k].count;}),backgroundColor:CL.slice().reverse(),borderRadius:6}]},options:{responsive:true,maintainAspectRatio:false,indexAxis:"y",plugins:{legend:{display:false}},scales:{x:{grid:{color:gc},ticks:{color:tc,stepSize:1}},y:{ticks:{color:tc}}}}});
+}
+
+function renderSecInvernaderos(costos){
+  var isLight=!document.body.classList.contains("dark"), tc=isLight?"#64748b":"#94a3b8", gc=isLight?"#e2e8f0":"#334155";
+  var bloques={};
+  costos.forEach(function(c){
+    var k=(c.sede||"")+"|"+(c.ubicacion||"");
+    if(!(c.ubicacion||"").trim()) return;
+    if(!bloques[k]) bloques[k]={costo:0,m2:c.m2_bloque||0,label:(c.ubicacion||""),sede:(c.sede||"")};
+    bloques[k].costo+=parseFloat(c.total_linea)||0; if(!bloques[k].m2 && c.m2_bloque) bloques[k].m2=c.m2_bloque;
+  });
+  var sortedB=Object.keys(bloques).sort(function(a,b){return bloques[b].costo-bloques[a].costo}).slice(0,15);
+  var labelsB=sortedB.map(function(k){return bloques[k].label;}), costosB=sortedB.map(function(k){return bloques[k].costo;}), colorsB=sortedB.map(function(_,i){return CL[i%CL.length];});
+  if(charts["chInvBloqueG"]) charts["chInvBloqueG"].destroy(); var ctx1=document.getElementById("chInvBloqueG");
+  if(ctx1) charts["chInvBloqueG"]=new Chart(ctx1,{type:"bar",data:{labels:labelsB,datasets:[{data:costosB,backgroundColor:colorsB,borderRadius:6}]},options:{responsive:true,maintainAspectRatio:false,indexAxis:"y",plugins:{legend:{display:false}},scales:{x:{grid:{color:gc},ticks:{color:tc,callback:function(v){return fmtK(v)}}},y:{ticks:{color:tc}}}}});
+  var m2B=sortedB.map(function(k){var m=bloques[k].m2;return m>0?Math.round(bloques[k].costo/m):0;});
+  if(charts["chInvM2BloqueG"]) charts["chInvM2BloqueG"].destroy(); var ctx2=document.getElementById("chInvM2BloqueG");
+  if(ctx2) charts["chInvM2BloqueG"]=new Chart(ctx2,{type:"bar",data:{labels:labelsB,datasets:[{data:m2B,backgroundColor:colorsB,borderRadius:6}]},options:{responsive:true,maintainAspectRatio:false,indexAxis:"y",plugins:{legend:{display:false}},scales:{x:{grid:{color:gc},ticks:{color:tc,callback:function(v){return"$"+fmtK(v)}}},y:{ticks:{color:tc}}}}});
+  var cambio=0,lavado=0,otros=0; costos.forEach(function(c){var t=(c.tipo||"").toLowerCase(),v=parseFloat(c.total_linea)||0;if(t.includes("cambio"))cambio+=v;else if(t.includes("lavado"))lavado+=v;else otros+=v;});
+  if(charts["chInvRatioG"]) charts["chInvRatioG"].destroy(); var ctx3=document.getElementById("chInvRatioG");
+  if(ctx3) charts["chInvRatioG"]=new Chart(ctx3,{type:"doughnut",data:{labels:["Cambio","Lavado","Otros"],datasets:[{data:[cambio,lavado,otros],backgroundColor:[CL[0],CL[1],CL[2]],borderWidth:0,hoverOffset:6}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:"bottom",labels:{color:tc}}}}});
+  var sedesInv={"OLAS":{costo:0,m2:0},"MANANTIALES":{costo:0,m2:0}}, bContados={};
+  costos.forEach(function(c){ var s=(c.sede||"").toUpperCase(); if(sedesInv[s]) sedesInv[s].costo+=parseFloat(c.total_linea)||0; var bk=s+"|"+(c.ubicacion||"").toUpperCase(); if(!bContados[bk]&&(c.m2_bloque||0)>0){bContados[bk]=true;if(sedesInv[s])sedesInv[s].m2+=c.m2_bloque;} });
+  var cm2Sedes=["OLAS","MANANTIALES"].map(function(s){var d=sedesInv[s];return d.m2>0?Math.round(d.costo/d.m2):0;});
+  if(charts["chInvM2SedesG"]) charts["chInvM2SedesG"].destroy(); var ctx4=document.getElementById("chInvM2SedesG");
+  if(ctx4) charts["chInvM2SedesG"]=new Chart(ctx4,{type:"bar",data:{labels:["OLAS","MANANTIALES"],datasets:[{data:cm2Sedes,backgroundColor:[CL[0],CL[1]],borderRadius:6}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:gc},ticks:{color:tc}},y:{grid:{color:gc},ticks:{color:tc,callback:function(v){return"$"+fmtK(v)}}}}}});
+}
+
+function mkChart(id,type,labels,datasets,opts){
+  if(charts[id])charts[id].destroy();var ctx=document.getElementById(id);if(!ctx)return;
+  var isLight=!document.body.classList.contains("dark"), tc=isLight?"#64748b":"#94a3b8", gc=isLight?"#e2e8f0":"#334155";
+  charts[id]=new Chart(ctx,{type:type,data:{labels:labels,datasets:datasets},options:Object.assign({responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:tc}}},scales:type==="pie"||type==="doughnut"||type==="radar"?undefined:{x:{grid:{color:gc},ticks:{color:tc}},y:{grid:{color:gc},ticks:{color:tc,callback:function(v){return fmtK(v)}}}}},opts||{})});
+}
+
+function chCat(cos){var m={};cos.forEach(function(c){if(c.categoria)m[c.categoria]=(m[c.categoria]||0)+(parseFloat(c.total_linea)||0)});var s=Object.keys(m).sort(function(a,b){return m[b]-m[a]});mkChart("chCat","bar",s,[{data:s.map(function(k){return m[k]}),backgroundColor:CL,borderRadius:6}],{indexAxis:"x",plugins:{legend:{display:false}}})}
+function chTipo(cos){var m={};cos.forEach(function(c){if(c.tipo)m[c.tipo]=(m[c.tipo]||0)+(parseFloat(c.total_linea)||0)});var s=Object.keys(m).sort(function(a,b){return m[b]-m[a]}).slice(0,10);mkChart("chTipo","bar",s,[{data:s.map(function(k){return m[k]}),backgroundColor:CL,borderRadius:6}],{indexAxis:"y",plugins:{legend:{display:false}}})}
+function chMes(cos){var m={};cos.forEach(function(c){var x=(c.fecha||"").substring(0,7);if(x)m[x]=(m[x]||0)+(parseFloat(c.total_linea)||0)});var l=Object.keys(m).sort();mkChart("chMes","line",l,[{label:"Gasto",data:l.map(function(k){return m[k]}),borderColor:CL[0],backgroundColor:"rgba(37,99,235,0.15)",fill:true,tension:0.4,pointRadius:4,pointBackgroundColor:CL[0]}]);}
+function chEmp(ots,cos){var emps=uniq(ots.map(function(o){return o.empresa}).filter(Boolean));var cats=uniq(cos.map(function(c){return c.categoria}).filter(Boolean)).slice(0,5);var ds=cats.map(function(cat,i){return{label:cat,data:emps.map(function(emp){var ids=new Set(ots.filter(function(o){return o.empresa===emp}).map(function(o){return o.ot_id}));return cos.filter(function(c){return c.categoria===cat&&ids.has(c.ot_id)}).reduce(function(a,c){return a+(parseFloat(c.total_linea)||0)},0)}),backgroundColor:CL[i],borderRadius:4}});mkChart("chEmp","bar",emps,ds,{scales:{x:{stacked:true},y:{stacked:true,ticks:{callback:function(v){return fmtK(v)}}}}})}
+function chEst(ots){var m={PENDIENTE:0,"EN PROCESO":0,CERRADO:0};ots.forEach(function(o){m[o.estado]=(m[o.estado]||0)+1});mkChart("chEst","doughnut",Object.keys(m),[{data:Object.values(m),backgroundColor:[CL[2],CL[0],CL[1]],borderWidth:0,hoverOffset:6}],{plugins:{legend:{position:"bottom"}}})}
+function chLab(cos){var m={};cos.forEach(function(c){if(c.labor)m[c.labor]=(m[c.labor]||0)+(parseFloat(c.total_linea)||0)});var l=Object.keys(m);mkChart("chLab","doughnut",l,[{data:l.map(function(k){return m[k]}),backgroundColor:CL.slice(0,l.length),borderWidth:0,hoverOffset:6}],{plugins:{legend:{position:"bottom"}}})}
+function chTop(ots,cos){var m={};cos.forEach(function(c){m[c.ot_id]=(m[c.ot_id]||0)+(parseFloat(c.total_linea)||0)});var s=Object.keys(m).sort(function(a,b){return m[b]-m[a]}).slice(0,10);mkChart("chTop","bar",s,[{data:s.map(function(k){return m[k]}),backgroundColor:CL,borderRadius:6}],{indexAxis:"y",plugins:{legend:{display:false}}})}
+function chRadar(cos){var cats=uniq(cos.map(function(c){return c.categoria}).filter(Boolean));var prom=cats.map(function(cat){var r=cos.filter(function(c){return c.categoria===cat});return r.length?r.reduce(function(a,c){return a+(parseFloat(c.total_linea)||0)},0)/r.length:0});mkChart("chRadar","radar",cats,[{label:"Ticket Promedio",data:prom,backgroundColor:"rgba(37,99,235,0.2)",borderColor:CL[0],pointBackgroundColor:CL[0]}]);}
+function chVol(ots){var m={};ots.forEach(function(o){var x=(o.fecha||"").substring(0,7);if(x)m[x]=(m[x]||0)+1});var l=Object.keys(m).sort();mkChart("chVol","bar",l,[{data:l.map(function(k){return m[k]}),backgroundColor:CL[4],borderRadius:6}],{plugins:{legend:{display:false}}})}
+function chSedes(){
+  var costoOlas=0,costoMant=0; var idsOlas=new Set(),idsMant=new Set();
+  otData.forEach(function(o){var s=(o.sede||"").toUpperCase();if(s==="OLAS")idsOlas.add(o.ot_id);else if(s==="MANANTIALES")idsMant.add(o.ot_id);});
+  costoData.forEach(function(c){var t=parseFloat(c.total_linea)||0;if(idsOlas.has(c.ot_id))costoOlas+=t;else if(idsMant.has(c.ot_id))costoMant+=t;});
+  mkChart("chSedes","bar",["OLAS","MANANTIALES"],[{data:[costoOlas,costoMant],backgroundColor:[CL[0],CL[1]],borderRadius:6}],{plugins:{legend:{display:false}}});
+  mkChart("chM2","bar",["OLAS (325k m²)","MANANTIALES (160k m²)"],[{label:"$/m²",data:[Math.round(costoOlas/M2["OLAS"]),Math.round(costoMant/M2["MANANTIALES"])],backgroundColor:[CL[4],CL[2]],borderRadius:6}],{plugins:{legend:{display:false}}});
+}
+
+function poblarFiltrosCC(){
+  var clasifs=[]; centrosCostosData.forEach(function(c){ if(c.clasificacion&&clasifs.indexOf(c.clasificacion)<0) clasifs.push(c.clasificacion); });
+  var sel=document.getElementById("ccFiltClasif"); if(sel){ sel.innerHTML='<option value="">Clasificaciones</option>'; clasifs.sort().forEach(function(cl){ sel.innerHTML+='<option value="'+esc(cl)+'">'+esc(cl)+'</option>'; }); }
+}
+
+function renderChCC(){
+  var sede=(document.getElementById("ccFiltSede")||{value:""}).value, clasif=(document.getElementById("ccFiltClasif")||{value:""}).value;
+  var d=getDatos(); var ccMap={};centrosCostosData.forEach(function(c){ccMap[c.id]=c;});
+  var costosFilt=d.costos.filter(function(c){
+    if(sede&&(c.sede||"").toUpperCase()!==sede.toUpperCase()) return false;
+    if(clasif){var info=ccMap[c.cc];if(!info||info.clasificacion!==clasif)return false;} return true;
+  });
+  var porCC={};costosFilt.forEach(function(c){var k=c.cc||"SIN CC";porCC[k]=(porCC[k]||0)+(parseFloat(c.total_linea)||0);});
+  var totalGasto=costosFilt.reduce(function(a,c){return a+(parseFloat(c.total_linea)||0)},0), nCC=Object.keys(porCC).filter(function(k){return k!=="SIN CC"}).length;
+  var topCC=Object.keys(porCC).sort(function(a,b){return porCC[b]-porCC[a]})[0]||"—", topInfo=ccMap[topCC];
+  var porClasif={};costosFilt.forEach(function(c){var info=ccMap[c.cc];var cl=info?info.clasificacion:"Sin clasificar";porClasif[cl]=(porClasif[cl]||0)+(parseFloat(c.total_linea)||0);});
+  
+  var el=document.getElementById("ccKpis");if(el){el.innerHTML="";
+  [{ico:"💰",val:fmtCOP(totalGasto),lbl:"Total CC",cls:"blue"},{ico:"🏆",val:topCC,lbl:"Top CC",sub:topInfo?topInfo.descripcion:"",cls:"warn"},{ico:"🔧",val:fmtCOP(porClasif["MANTENIMIENTO"]||0),lbl:"Mantenimiento",cls:"green"},{ico:"📈",val:fmtCOP(porClasif["PROYECTO DE INVERSION"]||0),lbl:"Proyectos Inv.",cls:"purple"}].forEach(function(k){el.innerHTML+='<div class="kpi '+k.cls+'"><div class="kpi-ico">'+k.ico+'</div><div class="kpi-val">'+k.val+'</div><div class="kpi-lbl">'+k.lbl+'</div><div class="kpi-sub">'+(k.sub||"")+'</div></div>';});}
+  
+  var sortedCC=Object.keys(porCC).sort(function(a,b){return porCC[b]-porCC[a]}).slice(0,10);
+  mkChart("chCC","bar",sortedCC.map(function(k){return k}),[{data:sortedCC.map(function(k){return porCC[k]}),backgroundColor:CL,borderRadius:6}],{indexAxis:"y",plugins:{legend:{display:false}}});
+  var clasifKeys=Object.keys(porClasif).sort(function(a,b){return porClasif[b]-porClasif[a]});
+  mkChart("chCCClasif","doughnut",clasifKeys,[{data:clasifKeys.map(function(k){return porClasif[k]}),backgroundColor:CL,borderWidth:0}],{plugins:{legend:{position:"bottom"}}});
+  
+  var top5CC=Object.keys(porCC).sort(function(a,b){return porCC[b]-porCC[a]}).slice(0,5), mesesSet={};
+  costosFilt.forEach(function(c){var m=(c.fecha||"").substring(0,7);if(m)mesesSet[m]=true;}); var meses=Object.keys(mesesSet).sort();
+  var datasets5=top5CC.map(function(cc,i){return{label:cc,data:meses.map(function(m){return costosFilt.filter(function(c){return c.cc===cc&&(c.fecha||"").substring(0,7)===m;}).reduce(function(a,c){return a+(parseFloat(c.total_linea)||0)},0)}),borderColor:CL[i],tension:0.4};});
+  mkChart("chCCMes","line",meses,datasets5);
+}
+
+function renderPresupInversion(){
+  var sede=(document.getElementById("presInvSede")||{value:""}).value;
+  var ccsConPresup=centrosCostosData.filter(function(c){if((c.presupuesto||0)<=0)return false;if(sede&&(c.sede||"").toUpperCase()!==sede.toUpperCase())return false; return true;});
+  var tb=document.getElementById("presInvTbody"); if(!ccsConPresup.length){if(tb)tb.innerHTML='<tr><td colspan="8" class="lst-st">Sin presupuesto asignado</td></tr>';return;}
+  var ejecutadoPorCC={};costoData.forEach(function(c){var k=c.cc||"";if(!k)return;ejecutadoPorCC[k]=(ejecutadoPorCC[k]||0)+(parseFloat(c.total_linea)||0);});
+  var filas=ccsConPresup.map(function(cc){var pres=cc.presupuesto||0,ejec=ejecutadoPorCC[cc.id]||0,dif=pres-ejec,pct=pres>0?(ejec/pres*100):0,sobre=ejec>pres;return{cc:cc,pres:pres,ejec:ejec,dif:dif,pct:pct,sobre:sobre};}).sort(function(a,b){return b.pres-a.pres;});
+  var totPres=filas.reduce(function(a,r){return a+r.pres},0),totEjec=filas.reduce(function(a,r){return a+r.ejec},0),totDif=totPres-totEjec,nSobre=filas.filter(function(r){return r.sobre}).length,nOk=filas.filter(function(r){return !r.sobre&&r.ejec>0}).length,pctGlobal=totPres>0?(totEjec/totPres*100):0;
+  
+  var elKpi=document.getElementById("presInvKpis");if(elKpi){elKpi.innerHTML="";[{ico:"💼",val:fmtCOP(totPres),lbl:"Presupuesto Total",cls:"blue"},{ico:"💸",val:fmtCOP(totEjec),lbl:"Total Ejecutado",cls:totEjec>totPres?"warn":"green"},{ico:"🔴",val:nSobre,lbl:"CCs Sobreejec.",cls:"warn"},{ico:"🟢",val:nOk,lbl:"Dentro Presupuesto",cls:"green"}].forEach(function(k){elKpi.innerHTML+='<div class="kpi '+k.cls+'"><div class="kpi-ico">'+k.ico+'</div><div class="kpi-val">'+k.val+'</div><div class="kpi-lbl">'+k.lbl+'</div></div>';});}
+  
+  if(tb){tb.innerHTML="";filas.forEach(function(r){
+    var eb=r.ejec===0?'<span class="badge pend">Sin ejecutar</span>':r.sobre?'<span class="badge brd">Sobreejecutado</span>':'<span class="badge bgr">Dentro</span>';
+    var tr=document.createElement("tr"); if(r.sobre)tr.style.background="var(--danger-bg)";
+    tr.innerHTML='<td class="mono" style="font-weight:600">'+esc(r.cc.id)+'</td><td style="font-size:0.75rem">'+esc((r.cc.descripcion||"—").substring(0,30))+'</td><td>'+esc(r.cc.sede||"")+'</td><td class="r">'+fmtCOP(r.pres)+'</td><td class="r" style="color:'+(r.sobre?"var(--danger)":r.ejec>0?"var(--success)":"var(--text-muted)")+'">'+fmtCOP(r.ejec)+'</td><td class="r" style="color:'+(r.dif<0?"var(--danger)":"var(--success)")+'">'+(r.dif<0?"-":"+")+fmtCOP(Math.abs(r.dif))+'</td><td style="text-align:center">'+r.pct.toFixed(1)+"%</td><td style="text-align:center">'+eb+'</td>";
+    tb.appendChild(tr);
+  });
+  tb.innerHTML+='<tr style="background:var(--bg-hover);font-weight:700;"><td colspan="3">TOTAL</td><td class="r">'+fmtCOP(totPres)+'</td><td class="r">'+fmtCOP(totEjec)+'</td><td class="r">'+(totDif<0?"-":"+")+fmtCOP(Math.abs(totDif))+'</td><td style="text-align:center">'+pctGlobal.toFixed(1)+'%</td><td style="text-align:center"></td></tr>';}
+  
+  var top10=filas.slice(0,10);
+  mkChart("chPresInvBar","bar",top10.map(function(r){return r.cc.id;}),[{label:"Presupuesto",data:top10.map(function(r){return r.pres;}),backgroundColor:"rgba(37,99,235,0.3)",borderColor:"#2563eb",borderWidth:1,borderRadius:4},{label:"Ejecutado",data:top10.map(function(r){return r.ejec;}),backgroundColor:top10.map(function(r){return r.sobre?"#ef4444":"#10b981";}),borderRadius:4}],{indexAxis:"y"});
+  mkChart("chPresInvPct","bar",top10.map(function(r){return r.cc.id;}),[{label:"% Ejecución",data:top10.map(function(r){return Math.min(r.pct,150);}),backgroundColor:top10.map(function(r){return r.sobre?"#ef4444":"#10b981";}),borderRadius:4}],{indexAxis:"y",plugins:{legend:{display:false}},scales:{x:{max:150}}});
+}
+
+var PRESUPUESTO_INV = { cc:"MTZ000400", sede:"MANANTIALES", anio:"2026", meses:{"2026-01":23446981,"2026-02":23446981,"2026-03":23446981,"2026-04":23446981,"2026-05":23446981,"2026-06":23446981,"2026-07":23446981,"2026-08":23446981,"2026-09":29686759,"2026-10":23446981,"2026-11":23446981,"2026-12":23446981} };
+function renderAlertaPresupuesto(){
+  var P = PRESUPUESTO_INV, nomMes={"01":"Ene","02":"Feb","03":"Mar","04":"Abr","05":"May","06":"Jun","07":"Jul","08":"Ago","09":"Sep","10":"Oct","11":"Nov","12":"Dic"};
+  var costosFilt = invCostData.filter(function(r){ return (r.sede||"").toUpperCase() === "MANANTIALES" && (r.fecha||"").startsWith("2026"); });
+  if(!costosFilt.length){ costosFilt = costoData.filter(function(c){ var ot=otData.find(function(o){return o.ot_id===c.ot_id;}); return ((ot&&ot.sede)||"").toUpperCase()==="MANANTIALES" && (c.categoria||"").toLowerCase().indexOf("invernadero")>=0 && (c.fecha||"").startsWith("2026"); }); }
+  var ejecucion={}; Object.keys(P.meses).forEach(function(m){ ejecucion[m]=0; });
+  costosFilt.forEach(function(r){ var m=(r.fecha||"").substring(0,7); if(ejecucion[m]!==undefined) ejecucion[m]+=parseFloat(r.total_linea)||0; });
+  var totalPresup=Object.values(P.meses).reduce(function(a,b){return a+b},0), totalEjec=Object.values(ejecucion).reduce(function(a,b){return a+b},0), pctEjec=totalPresup>0?(totalEjec/totalPresup*100):0, hoy=new Date(), mesActual=hoy.getFullYear()+"-"+String(hoy.getMonth()+1).padStart(2,"0");
+  var mesesPasados=Object.keys(P.meses).filter(function(m){return m<=mesActual;}), presupAcumHoy=mesesPasados.reduce(function(a,m){return a+(P.meses[m]||0)},0), ejAcumHoy=mesesPasados.reduce(function(a,m){return a+(ejecucion[m]||0)},0), sobreEjec=ejAcumHoy>presupAcumHoy;
+  
+  var badge=document.getElementById("presupTotalBadge"); if(badge) badge.textContent="Total Asignado: "+fmtCOP(totalPresup);
+  var el=document.getElementById("presupKpis"); if(el){el.innerHTML="";
+  [{ico:"📋",val:fmtCOP(totalPresup),lbl:"Presupuesto Anual",cls:"blue"},{ico:"💸",val:fmtCOP(totalEjec),lbl:"Ejecutado Total",cls:totalEjec>totalPresup?"warn":"green"},{ico:"📊",val:fmtCOP(presupAcumHoy),lbl:"Acumulado a la fecha",cls:"purple"},{ico:sobreEjec?"🔴":"🟢",val:fmtCOP(Math.abs(ejAcumHoy-presupAcumHoy)),lbl:sobreEjec?"SOBREEJECUTADO":"DENTRO",cls:sobreEjec?"warn":"green"}].forEach(function(k){el.innerHTML+='<div class="kpi '+k.cls+'"><div class="kpi-ico">'+k.ico+'</div><div class="kpi-val" style="font-size:1.25rem">'+k.val+'</div><div class="kpi-lbl">'+k.lbl+'</div></div>';});}
+  
+  var isLight=!document.body.classList.contains("dark"), tc=isLight?"#64748b":"#94a3b8", gc=isLight?"#e2e8f0":"#334155";
+  var mLabels=Object.keys(P.meses).sort().map(function(m){return nomMes[m.substring(5,7)];}), pVals=Object.keys(P.meses).sort().map(function(m){return P.meses[m];}), eVals=Object.keys(P.meses).sort().map(function(m){return ejecucion[m]||0;});
+  mkChart("chPresup","bar",mLabels,[{label:"Presupuesto",data:pVals,backgroundColor:"rgba(37,99,235,0.3)",borderColor:"#2563eb",borderWidth:1,borderRadius:4},{label:"Ejecutado",data:eVals,backgroundColor:Object.keys(P.meses).sort().map(function(m){return m>mesActual?"#94a3b8":(ejecucion[m]||0)>P.meses[m]?"#ef4444":"#10b981";}),borderRadius:4}]);
+}
+
+var invData=[], invFiltrados=[], invSedeActiva="";
+function cargarInvernaderos(){
+  document.getElementById("invLoad").style.display="block"; document.getElementById("invWrap").style.display="none";
+  gsr("getResumenInvernaderos", null, function(res){
+      document.getElementById("invLoad").style.display="none"; document.getElementById("invWrap").style.display="block";
+      if(!res){ toast("❌ Error","err2"); return; }
+      invData = Array.isArray(res.bloques)?res.bloques:[];
+      var sedes=[]; invData.forEach(function(b){ if(b.sede&&sedes.indexOf(b.sede)<0) sedes.push(b.sede); });
+      var cont=document.getElementById("invSedeBtns"); cont.innerHTML="";
+      sedes.forEach(function(sede, idx){
+        var btn=document.createElement("button"); btn.className="atab"+(idx===0?" on":""); btn.textContent=sede;
+        btn.onclick=function(){ invSedeActiva=sede; cont.querySelectorAll(".atab").forEach(function(b){b.classList.remove("on");}); btn.classList.add("on"); filtrarInv(); };
+        cont.appendChild(btn); if(idx===0) invSedeActiva=sede;
+      });
+      actualizarKpisInv(); filtrarInv(); renderAlertaPresupuesto();
+    }, function(err){ document.getElementById("invLoad").style.display="none"; document.getElementById("invWrap").style.display="block"; toast("❌ "+err.message,"err2"); }
+  );
+}
+function actualizarKpisInv(){
+  var bSede=invSedeActiva?invData.filter(function(b){return b.sede===invSedeActiva;}):invData;
+  var v=0,p=0,cr=0,ok=0; bSede.forEach(function(b){if(b.alerta_global==="vencido")v++;else if(b.alerta_global==="cambio_req")cr++;else if(b.alerta_global==="proximo")p++;else ok++;});
+  document.getElementById("invTot").textContent=bSede.length; document.getElementById("invVenc").textContent=v; document.getElementById("invProx").textContent=p; document.getElementById("invCreq").textContent=cr; document.getElementById("invOk").textContent=ok;
+}
+function filtrarInv(){
+  var busq=(document.getElementById("invBusq").value||"").toLowerCase(), filt=document.getElementById("invFiltro").value;
+  invFiltrados=invData.filter(function(b){ if(invSedeActiva&&b.sede!==invSedeActiva)return false; if(busq&&!b.ubicacion.toLowerCase().includes(busq))return false; if(filt&&b.alerta_global!==filt)return false; return true; });
+  document.getElementById("invCount").textContent=invFiltrados.length+" bloques";
+  var tbody=document.getElementById("invTbody"); tbody.innerHTML="";
+  if(!invFiltrados.length){ document.getElementById("invEmpty").style.display="block"; }else{
+    document.getElementById("invEmpty").style.display="none";
+    invFiltrados.forEach(function(b){
+      var tr=document.createElement("tr");
+      tr.innerHTML='<td>'+esc(b.sede)+'</td><td style="font-weight:600">'+esc(b.ubicacion)+'</td><td class="r">'+b.num_naves+'</td><td class="r">'+b.num_medianave+'</td><td class="mono">'+esc(b.fecha_prog_cambio||"—")+'</td><td class="mono">'+esc(b.fecha_eje_cambio||"—")+'</td><td><span class="inv-badge '+b.alerta_cambio.estado+'">'+esc(b.alerta_cambio.label)+'</span></td><td class="mono">'+esc(b.fecha_prog_lavado||"—")+'</td><td class="mono">'+esc(b.fecha_eje_lavado||"—")+'</td><td><span class="inv-badge '+b.alerta_lavado.estado+'">'+esc(b.alerta_lavado.label)+'</span></td><td style="text-align:center;font-weight:600;color:'+(b.conteo_lavados>=3?"var(--danger)":b.conteo_lavados>=2?"var(--warning)":"var(--text-main)")+'">'+b.conteo_lavados+'/3</td>';
+      tbody.appendChild(tr);
+    });
+  }
+  var labels=invFiltrados.map(function(b){return b.ubicacion;});
+  mkChart("chInvCambio","bar",labels,[{label:"Días",data:invFiltrados.map(function(b){return b.alerta_cambio.dias||0;}),backgroundColor:invFiltrados.map(function(b){var e=b.alerta_cambio.estado;return e==="vencido"?"#ef4444":e==="proximo"?"#f59e0b":"#10b981";}),borderRadius:4}],{indexAxis:"y"});
+  mkChart("chInvLavado","bar",labels,[{label:"Días",data:invFiltrados.map(function(b){return b.requiere_cambio?0:b.alerta_lavado.dias||0;}),backgroundColor:invFiltrados.map(function(b){if(b.requiere_cambio)return "#8b5cf6";var e=b.alerta_lavado.estado;return e==="vencido"?"#ef4444":e==="proximo"?"#f59e0b":"#10b981";}),borderRadius:4}],{indexAxis:"y"});
+}
+
+var invCostData=[], invCostFiltrados=[];
+function cargarCostosInv(){
+  document.getElementById("invCostLoad").style.display="block"; document.getElementById("invCostWrap").style.display="none";
+  gsr("getAnaliticaInvernaderos", null, function(res){ invCostData=Array.isArray(res)?res:[]; document.getElementById("invCostLoad").style.display="none"; document.getElementById("invCostWrap").style.display="block"; filtrarCostosInv(); }, function(err){ document.getElementById("invCostLoad").style.display="none"; document.getElementById("invCostWrap").style.display="block"; toast("❌ Error","err2"); });
+}
+function filtrarCostosInv(){
+  var sede=document.getElementById("invCostSede").value, tipo=document.getElementById("invCostTipo").value, busq=(document.getElementById("invCostBusq").value||"").toLowerCase();
+  invCostFiltrados=invCostData.filter(function(r){ if(sede&&(r.sede||"").toUpperCase()!==sede)return false; if(busq&&!(r.ubicacion||"").toLowerCase().includes(busq))return false; if(tipo==="cambio"&&!(r.tipo||"").toLowerCase().includes("cambio"))return false; if(tipo==="lavado"&&!(r.tipo||"").toLowerCase().includes("lavado"))return false; if(tipo==="otros"){var t=(r.tipo||"").toLowerCase();if(t.includes("cambio")||t.includes("lavado"))return false;} return true; });
+  
+  var totalGasto=invCostFiltrados.reduce(function(a,r){return a+(parseFloat(r.total_linea)||0)},0), bloques={}, m2PorBloque={}, cambio=0, lavado=0;
+  invCostFiltrados.forEach(function(r){ var k=(r.sede||"")+"|"+(r.ubicacion||""); if(!(r.ubicacion||"").trim())return; bloques[k]=(bloques[k]||0)+(parseFloat(r.total_linea)||0); if((r.m2_bloque||0)>0)m2PorBloque[k]=r.m2_bloque; var t=(r.tipo||"").toLowerCase(), v=parseFloat(r.total_linea)||0; if(t.includes("cambio"))cambio+=v;else if(t.includes("lavado"))lavado+=v; });
+  var nBloques=Object.keys(bloques).length, topBloque=Object.keys(bloques).sort(function(a,b){return bloques[b]-bloques[a]})[0]||"", m2Total=0; Object.keys(m2PorBloque).forEach(function(k){m2Total+=m2PorBloque[k];});
+  
+  var el=document.getElementById("invCostKpis"); el.innerHTML="";
+  [{ico:"💰",val:fmtCOP(totalGasto),lbl:"Gasto Total",cls:"blue"},{ico:"📐",val:fmtCOP(Math.round(m2Total>0?totalGasto/m2Total:0)),lbl:"Costo/m² prom.",cls:"purple"},{ico:"🔄",val:fmtCOP(cambio),lbl:"Cambios",cls:"cyan"},{ico:"🚿",val:fmtCOP(lavado),lbl:"Lavados",cls:"green"}].forEach(function(k){el.innerHTML+='<div class="kpi '+k.cls+'"><div class="kpi-ico">'+k.ico+'</div><div class="kpi-val" style="font-size:1.25rem">'+k.val+'</div><div class="kpi-lbl">'+k.lbl+'</div></div>';});
+  
+  var tbody=document.getElementById("invCostTbody"); tbody.innerHTML="";
+  if(!invCostFiltrados.length){ document.getElementById("invCostEmpty").style.display="block"; document.getElementById("invCostFoot").innerHTML=""; document.getElementById("invCostTbl").style.display="none"; }else{
+    document.getElementById("invCostEmpty").style.display="none"; document.getElementById("invCostTbl").style.display="table";
+    invCostFiltrados.forEach(function(r){ var tr=document.createElement("tr"); tr.innerHTML='<td>'+esc(r.sede)+'</td><td style="font-weight:600">'+esc(r.ubicacion)+'</td><td class="r">'+Math.round(r.m2_bloque||0)+'</td><td class="r" style="color:var(--primary);font-weight:600;">'+fmtCOP(r.total_linea)+'</td><td class="r">'+fmtCOP(Math.round(r.m2_bloque>0?r.total_linea/r.m2_bloque:0))+'</td><td class="mono">'+esc(r.ot_id)+'</td><td class="mono">'+esc(r.fecha)+'</td><td>'+esc(r.tipo)+'</td><td style="font-size:0.75rem">'+esc(r.descripcion)+'</td><td class="r">'+fmtCOP(r.total_linea)+'</td>'; tbody.appendChild(tr); });
+    document.getElementById("invCostFoot").innerHTML='<div style="font-weight:700;font-size:1.25rem;">Total: <span style="color:var(--primary);">'+fmtCOP(totalGasto)+'</span></div>';
+  }
+  
+  var sB=Object.keys(bloques).sort(function(a,b){return bloques[b]-bloques[a]}).slice(0,10);
+  mkChart("chInvCostoBloque","bar",sB.map(function(k){return k.split("|")[1]||k;}),[{data:sB.map(function(k){return bloques[k];}),backgroundColor:CL,borderRadius:4}],{indexAxis:"y",plugins:{legend:{display:false}}});
+  mkChart("chInvCostoM2","bar",sB.map(function(k){return k.split("|")[1]||k;}),[{data:sB.map(function(k){return m2PorBloque[k]>0?Math.round(bloques[k]/m2PorBloque[k]):0;}),backgroundColor:CL,borderRadius:4}],{indexAxis:"y",plugins:{legend:{display:false}}});
+
+  var sedesData={"OLAS":{c:0,m2:0},"MANANTIALES":{c:0,m2:0}}, bCont={};
+  invCostData.forEach(function(r){ var s=(r.sede||"").toUpperCase(); if(sedesData[s])sedesData[s].c+=parseFloat(r.total_linea)||0; var k=s+"|"+(r.ubicacion||"").toUpperCase(); if((r.ubicacion||"").trim()&&!bCont[k]&&(r.m2_bloque||0)>0){bCont[k]=true;if(sedesData[s])sedesData[s].m2+=(r.m2_bloque||0);} });
+  mkChart("chInvM2Sede","bar",["OLAS","MANANTIALES"],[{label:"Costo/m²",data:[sedesData["OLAS"].m2>0?sedesData["OLAS"].c/sedesData["OLAS"].m2:0, sedesData["MANANTIALES"].m2>0?sedesData["MANANTIALES"].c/sedesData["MANANTIALES"].m2:0],backgroundColor:[CL[0],CL[1]],borderRadius:4}]);
+  var c2=0,l2=0,o2=0; invCostData.forEach(function(r){var t=(r.tipo||"").toLowerCase(), v=parseFloat(r.total_linea)||0; if(t.includes("cambio"))c2+=v;else if(t.includes("lavado"))l2+=v;else o2+=v;});
+  mkChart("chInvRatio","doughnut",["Cambio","Lavado","Otros"],[{data:[c2,l2,o2],backgroundColor:[CL[0],CL[1],CL[2]],borderWidth:0}],{plugins:{legend:{position:"bottom"}}});
+}
+
+var eqData=[], eqFiltrados=[];
+function cargarEquiposAnalitica(){
+  document.getElementById("eqLoad").style.display="block"; document.getElementById("eqWrap").style.display="none";
+  gsr("getAnaliticaEquipos", null, function(res){ eqData=Array.isArray(res)?res:[]; document.getElementById("eqLoad").style.display="none"; document.getElementById("eqWrap").style.display="block"; var sedes=uniq(eqData.map(function(e){return e.sede}).filter(Boolean)).sort(), sel=document.getElementById("eqSede"), cur=sel.value; sel.innerHTML='<option value="">Sedes</option>'; sedes.forEach(function(s){sel.innerHTML+='<option'+(s===cur?' selected':'')+'>'+s+'</option>'}); filtrarEquiposAnalitica(); }, function(){});
+}
+function filtrarEquiposAnalitica(){
+  var sede=document.getElementById("eqSede").value, cat=document.getElementById("eqCat").value, busq=(document.getElementById("eqBusq").value||"").toLowerCase();
+  eqFiltrados=eqData.filter(function(e){ if(sede&&e.sede!==sede)return false; if(cat&&e.categoria!==cat)return false; if(busq&&!(e.equipo_cod+e.equipo_desc).toLowerCase().includes(busq))return false; return true; });
+  document.getElementById("eqCount").textContent=eqFiltrados.length+" registros";
+  
+  var tot=eqFiltrados.reduce(function(a,r){return a+(parseFloat(r.total_linea)||0)},0), mEq={};
+  eqFiltrados.forEach(function(r){var k=r.equipo_cod||r.equipo_desc;if(!k)return;mEq[k]=(mEq[k]||0)+(parseFloat(r.total_linea)||0);});
+  var sEq=Object.keys(mEq).sort(function(a,b){return mEq[b]-mEq[a]}), tEq=sEq[0]||"";
+  var el=document.getElementById("eqKpiGrid"); el.innerHTML="";
+  [{ico:"💰",val:fmtCOP(tot),lbl:"Gasto Total Equipos",cls:"blue"},{ico:"⚙",val:uniq(eqFiltrados.map(function(r){return r.equipo_cod||r.equipo_desc}).filter(Boolean)).length,lbl:"Equipos intervenidos",cls:"purple"},{ico:"🏆",val:tEq||"—",lbl:"Top Equipo",cls:"warn"}].forEach(function(k){el.innerHTML+='<div class="kpi '+k.cls+'"><div class="kpi-ico">'+k.ico+'</div><div class="kpi-val" style="font-size:1.25rem">'+k.val+'</div><div class="kpi-lbl">'+k.lbl+'</div></div>';});
+  
+  var tb=document.getElementById("eqTbody"); tb.innerHTML="";
+  if(!eqFiltrados.length){document.getElementById("eqEmpty").style.display="block";}else{
+    document.getElementById("eqEmpty").style.display="none";
+    eqFiltrados.forEach(function(r){var tr=document.createElement("tr");tr.innerHTML='<td class="mono">'+esc(r.equipo_cod||"—")+'</td><td style="font-weight:600">'+esc(r.equipo_desc||"—")+'</td><td>'+esc(r.sede||"")+'</td><td class="mono">'+esc(r.ot_id)+'</td><td class="mono">'+esc(r.fecha)+'</td><td>'+esc(r.categoria)+'</td><td>'+esc(r.tipo)+'</td><td style="font-size:0.75rem">'+esc(r.descripcion)+'</td><td class="r" style="color:var(--primary);font-weight:600;">'+fmtCOP(r.total_linea)+'</td>';tb.appendChild(tr);});
+  }
+  mkChart("chEqCosto","bar",sEq.slice(0,10),[{data:sEq.slice(0,10).map(function(k){return mEq[k]}),backgroundColor:CL,borderRadius:4}],{indexAxis:"y",plugins:{legend:{display:false}}});
+  var mC={}; eqFiltrados.forEach(function(r){var k=r.equipo_cod||r.equipo_desc;if(k)mC[k]=(mC[k]||0)+1;}); var sC=Object.keys(mC).sort(function(a,b){return mC[b]-mC[a]});
+  mkChart("chEqCount","bar",sC.slice(0,10),[{data:sC.slice(0,10).map(function(k){return mC[k]}),backgroundColor:CL.slice().reverse(),borderRadius:4}],{indexAxis:"y",plugins:{legend:{display:false}}});
+}
+
+// ═══ ADMINISTRACIÓN ══════════════════════════════
+var catSeleccionada = "";
+function renderAdmin(mantenerCat){
+  var cats = Object.keys(catalogo); if(!mantenerCat) catSeleccionada = cats.length ? cats[0] : "";
+  document.getElementById("ccount").textContent = cats.length+" categorías";
+  var cl = document.getElementById("clist"); cl.innerHTML="";
+  cats.forEach(function(cat){
+    var isActive = cat === catSeleccionada;
+    var d = document.createElement("div");
+    d.style.cssText = "display:flex;align-items:center;justify-content:space-between;border-radius:var(--radius-sm);padding:0.75rem 1rem;cursor:pointer;transition:all .2s;border:1px solid "+(isActive?"var(--primary)":"var(--border-color)")+";background:"+(isActive?"var(--primary-bg)":"var(--bg-hover)");
+    d.onclick = function(e){ if(e.target.closest("button")) return; catSeleccionada = cat; renderAdmin(true); };
+    d.innerHTML = '<div style="flex:1"><div style="font-size:0.875rem;font-weight:600;color:'+(isActive?"var(--primary)":"var(--text-main)")+'">'+esc(cat)+'</div><div style="font-size:0.75rem;color:var(--text-muted);">'+(catalogo[cat]?catalogo[cat].length:0)+' tipos</div></div><div style="display:flex;gap:0.25rem"><button class="btn bwn" style="padding:4px 8px;font-size:0.75rem;" onclick="editCat(this.dataset.cat)" data-cat="'+esc(cat)+'">✏</button><button class="btn brd" style="padding:4px 8px;font-size:0.75rem;" onclick="delCat(this.dataset.cat)" data-cat="'+esc(cat)+'">🗑</button></div>';
+    cl.appendChild(d);
+  });
+  
+  var tipos = catSeleccionada && catalogo[catSeleccionada] ? catalogo[catSeleccionada] : [];
+  document.getElementById("tcount").textContent = catSeleccionada ? tipos.length+" tipos" : "0 tipos";
+  var tl = document.getElementById("tlist"); tl.innerHTML="";
+  if(!catSeleccionada || !tipos.length){ tl.innerHTML='<div class="lst-st">Sin tipos — agrega uno abajo</div>'; } 
+  else {
+    tipos.forEach(function(t){
+      var d = document.createElement("div");
+      d.style.cssText="display:flex;align-items:center;justify-content:space-between;background:var(--bg-hover);border:1px solid var(--border-color);border-radius:var(--radius-sm);padding:0.5rem 1rem;";
+      d.innerHTML='<div style="font-size:0.875rem;font-weight:500;">'+esc(t)+'</div><div style="display:flex;gap:0.25rem"><button class="btn bwn" style="padding:4px 8px;font-size:0.75rem;" onclick="editTipo(this.dataset.cat,this.dataset.tip)" data-cat="'+esc(catSeleccionada)+'" data-tip="'+esc(t)+'">✏</button><button class="btn brd" style="padding:4px 8px;font-size:0.75rem;" onclick="delTipo(this.dataset.cat,this.dataset.tip)" data-cat="'+esc(catSeleccionada)+'" data-tip="'+esc(t)+'">🗑</button></div>';
+      tl.appendChild(d);
+    });
+  }
+  
+  var sel = document.getElementById("ntcat");
+  sel.innerHTML='<option value="">— Categoría —</option>';
+  cats.forEach(function(c){ sel.innerHTML+='<option value="'+esc(c)+'"'+(c===catSeleccionada?' selected':'')+'>'+esc(c)+'</option>'; });
+  if(catSeleccionada) sel.value = catSeleccionada;
+  gsr("saveCatalogo", catalogo, null, null);
+}
+
+function addCat(){var v=document.getElementById("nci").value.trim();if(!v||catalogo[v]){toast("⚠️ Inválido","wn2");return}catalogo[v]=[];document.getElementById("nci").value="";catSeleccionada=v;renderAdmin(true);toast("✅ Creada","ok2")}
+function delCat(cat){if(!confirm("¿Eliminar \""+cat+"\"?"))return;delete catalogo[cat];if(catSeleccionada===cat)catSeleccionada=Object.keys(catalogo)[0]||'';renderAdmin(true);toast("🗑 Eliminada","ok2")}
+function addTipo(){var cat=document.getElementById("ntcat").value,v=document.getElementById("nti").value.trim();if(!cat||!v){toast("⚠️ Faltan datos","wn2");return}if(!catalogo[cat])catalogo[cat]=[];if(catalogo[cat].indexOf(v)!==-1){toast("⚠️ Ya existe","wn2");return}catalogo[cat].push(v);document.getElementById("nti").value="";catSeleccionada=cat;renderAdmin(true);toast("✅ Agregado","ok2")}
+function delTipo(cat,tipo){if(!confirm("¿Eliminar?"))return;catalogo[cat]=(catalogo[cat]||[]).filter(function(t){return t!==tipo});catSeleccionada=cat;renderAdmin(true);toast("🗑 Eliminado","ok2")}
+
+var _mm="",_md={};
+function editCat(cat){_mm="cat";_md={old:cat};document.getElementById("mtit").textContent="Editar categoría";document.getElementById("min").value=cat;document.getElementById("mbg").classList.add("open")}
+function editTipo(cat,tipo){_mm="tipo";_md={cat:cat,old:tipo};document.getElementById("mtit").textContent="Editar tipo";document.getElementById("min").value=tipo;document.getElementById("mbg").classList.add("open")}
+function closeM(){document.getElementById("mbg").classList.remove("open")}
+function saveM(){var v=document.getElementById("min").value.trim();if(!v)return;if(_mm==="cat"){var t=catalogo[_md.old]||[];delete catalogo[_md.old];catalogo[v]=t;catSeleccionada=v;}else{var a=catalogo[_md.cat]||[];var i=a.indexOf(_md.old);if(i!==-1)a[i]=v;catalogo[_md.cat]=a;catSeleccionada=_md.cat;}closeM();renderAdmin(true);toast("✅ Actualizado","ok2")}
+
+// ═══ UTILIDADES GENERALES ════════════════════════
+function normalizarEmpresa(s){ return !s ? "" : s.trim().toLowerCase().replace(/\b\w/g,function(l){return l.toUpperCase();}); }
+function esc(s){return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}
+function fmtCOP(n){return"$ "+parseFloat(n||0).toLocaleString("es-CO",{minimumFractionDigits:0,maximumFractionDigits:0})}
+function fmtK(v){if(Math.abs(v)>=1e6)return"$"+(v/1e6).toFixed(1)+"M";if(Math.abs(v)>=1e3)return"$"+(v/1e3).toFixed(0)+"K";return"$"+v}
+function setB(bid,sid,tid,loading,txt){var b=document.getElementById(bid);if(b)b.disabled=loading;var s=document.getElementById(sid);if(s)s.style.display=loading?"block":"none";var t=document.getElementById(tid);if(t)t.textContent=txt}
+function toast(msg,type){var t=document.getElementById("toast");t.textContent=msg;t.className="toast show "+(type||"");clearTimeout(t._tm);t._tm=setTimeout(function(){t.className="toast"},3800)}
+
+function toggleTheme(){
+  var isDark = document.body.classList.toggle("dark");
+  document.getElementById("themeLabel").textContent = isDark ? "Claro" : "Oscuro";
+  document.getElementById("themeBtn").innerHTML = isDark ? "☀️ <span>Claro</span>" : "🌙 <span>Oscuro</span>";
+  var tc = document.getElementById("themeColor"); if(tc) tc.content = isDark ? "#0f172a" : "#f8fafc";
+  try{ localStorage.setItem("ot_theme", isDark?"dark":"light"); }catch(e){}
+  setTimeout(function(){ if(otData.length||costoData.length) renderCharts(); }, 50);
+}
+function initTheme(){
+  var saved; try{ saved = localStorage.getItem("ot_theme"); }catch(e){}
+  if(saved === "dark"){
+    document.body.classList.add("dark");
+    document.getElementById("themeLabel").textContent = "Claro";
+    document.getElementById("themeBtn").innerHTML = "☀️ <span>Claro</span>";
+  }
+}
