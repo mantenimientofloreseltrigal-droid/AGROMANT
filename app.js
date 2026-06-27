@@ -4,7 +4,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/p
 // CONEXIÓN API REAL (GITHUB -> GOOGLE)
 // ====================================================================
 // PEGA AQUÍ TU LINK DE GOOGLE APPS SCRIPT:
-var SCRIPT_URL = "https://script.google.com/macros/s/TU_LINK_AQUI/exec";
+var SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzSlNiYG3N4b1kRsXXHTIDjnWLfOviEyHiK0OkHJKW524mM-AtPOnQQV8oPjOmp5TRP/exec";
 
 function gsr(fn, args, onSuccess, onError) {
   fetch(SCRIPT_URL, {
