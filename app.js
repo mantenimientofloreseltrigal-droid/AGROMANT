@@ -1,5 +1,38 @@
 pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
+// ====================================================================
+// CONEXIÓN API REAL (GITHUB -> GOOGLE)
+// ====================================================================
+// PEGA AQUÍ TU LINK DE GOOGLE APPS SCRIPT:
+var SCRIPT_URL = "https://script.google.com/macros/s/TU_LINK_AQUI/exec";
+
+function gsr(fn, args, onSuccess, onError) {
+  fetch(SCRIPT_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'text/plain;charset=utf-8'
+    },
+    body: JSON.stringify({ funcion: fn, parametros: args })
+  })
+  .then(function(respuesta) {
+    return respuesta.json();
+  })
+  .then(function(data) {
+    if (data && data.error) {
+      if (onError) onError(new Error(data.error));
+      else toast("❌ Error del servidor: " + data.error, "err2");
+    } else {
+      if (onSuccess) onSuccess(data);
+    }
+  })
+  .catch(function(error) {
+    console.error("Error de conexión:", error);
+    if (onError) onError(error);
+    else toast("❌ Error de red al contactar a Google", "err2");
+  });
+}
+// ====================================================================
+
 var OT={}, pdfB64="", actasFiles=[];
 var centrosCostosData = [];
 var allOTs=[], filtOTs=[], pgOTs=1, pgSz=15;
@@ -18,30 +51,6 @@ var labores=["Mano de obra","Material","Repuesto","Servicio","Transporte","Otro"
 var CL=["#3b82f6","#10b981","#f59e0b","#8b5cf6","#ec4899","#06b6d4","#f97316","#84cc16","#ef4444","#a78bfa"];
 
 function uniq(arr){var seen={},out=[];arr.forEach(function(v){if(v!==undefined&&v!==null&&v!==""&&!seen[v]){seen[v]=1;out.push(v);}});return out;}
-
-// ====================================================================
-// SIMULACIÓN DE GOOGLE SCRIPT RUN PARA GITHUB PAGES (Evita que tire error si no está en Apps Script)
-// ====================================================================
-var google = google || {
-  script: {
-    run: {
-      withSuccessHandler: function(cb){ return this; },
-      withFailureHandler: function(cb){ return this; }
-    }
-  }
-};
-
-function gsr(fn, args, onSuccess, onError) {
-  try {
-    var runner = google.script.run
-      .withSuccessHandler(onSuccess||function(){})
-      .withFailureHandler(onError||function(e){toast("❌ Error: "+e.message,"err2")});
-    runner[fn](args);
-  } catch(e) {
-    console.log("Mock enviando a backend: " + fn);
-    if(onError) onError({message: "No ejecutando dentro de Apps Script"});
-  }
-}
 
 window.addEventListener("DOMContentLoaded",function(){
   initTheme();
