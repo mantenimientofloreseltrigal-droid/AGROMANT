@@ -16,6 +16,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 
 <link rel="stylesheet" href="styles.css">
 
@@ -31,6 +32,7 @@
     <button class="ntab"    id="nt4" onclick="goTab(4)">📈 Analítica</button>
     <button class="ntab"    id="nt5" onclick="goTab(5)">⚙ Categorías</button>
     <button class="ntab"    id="nt6" onclick="goTab(6)">⚡ Energía</button>
+    <button class="ntab"    id="nt7" onclick="goTab(7)">📥 Carga Masiva</button>
   </div>
   <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="Cambiar modo claro/oscuro">🌙 <span id="themeLabel">Oscuro</span></button>
   <div class="steps">
@@ -577,6 +579,48 @@
       </table>
       <div class="lst-st" id="enerEmpty" style="display:none">Sin registros de energía todavía</div>
     </div>
+  </div>
+</div></div>
+
+<div id="s7" class="screen"><div class="pg">
+  <div class="ptit">📥 Carga Masiva de Cotizaciones</div>
+  <div class="psub">Sube el Excel de cotizaciones de proveedores (una fila por ítem) y revisa antes de confirmar</div>
+
+  <div class="card">
+    <div class="card-head"><span class="card-htit">1. Sube el archivo</span></div>
+    <div style="padding:1.25rem;">
+      <p style="font-size:0.8125rem;color:var(--text-muted);margin-bottom:1rem;">
+        Usa la plantilla con las columnas: <span class="mono">ot_id, fecha, proveedor, sede, centro_costo, categoria, tipo, labor, descripcion, ubicacion, cantidad, precio_unitario, estado</span>.
+        Cada fila es un ítem; varias filas con el mismo <span class="mono">ot_id</span> forman una sola cotización.
+      </p>
+      <input type="file" id="cmFile" accept=".xlsx,.xls" style="margin-bottom:0.75rem;">
+      <br>
+      <button class="btn bbl" onclick="procesarCargaMasiva()">📂 Procesar archivo</button>
+    </div>
+  </div>
+
+  <div class="card" id="cmPreviewCard" style="margin-top:1.5rem; display:none;">
+    <div class="card-head">
+      <span class="card-htit">2. Revisa antes de confirmar</span>
+      <span class="card-hsub" id="cmResumen">—</span>
+    </div>
+    <div class="rtable-wrap">
+      <table>
+        <thead><tr><th>OT_ID</th><th>Proveedor</th><th>Sede</th><th>Categoría(s)</th><th class="r">Ítems</th><th class="r">Subtotal</th><th>Estado</th><th>Validación</th></tr></thead>
+        <tbody id="cmTbody"></tbody>
+      </table>
+    </div>
+    <div style="padding:1rem 1.25rem;display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;">
+      <button type="button" class="btnp" id="btnCM" style="width:auto;padding:0.75rem 1.5rem;" onclick="confirmarCargaMasiva()">
+        <span class="spin" id="spCM"></span><span id="bCMt">✅ Confirmar carga</span>
+      </button>
+      <span style="font-size:0.75rem;color:var(--text-muted);" id="cmAviso"></span>
+    </div>
+  </div>
+
+  <div class="card" id="cmResultCard" style="margin-top:1.5rem; display:none;">
+    <div class="card-head"><span class="card-htit">Resultado</span></div>
+    <div style="padding:1.25rem;" id="cmResultBody"></div>
   </div>
 </div></div>
 

@@ -466,6 +466,65 @@ SB.eliminarEnergia = async function (id_mov) {
   return { ok: true };
 };
 
+// ---- CARGA MASIVA (cotizaciones de proveedores) ----
+
+SB.cargaMasiva = async function (filas) {
+  var grupos = {};
+  filas.forEach(function (f) {
+    var oid = String(f.ot_id || "").trim();
+    if (!oid) return;
+    if (!grupos[oid]) grupos[oid] = [];
+    grupos[oid].push(f);
+  });
+
+  var creadas = [], omitidas = [], errores = [], lineasInsertadas = 0;
+
+  for (var oid in grupos) {
+    if (!grupos.hasOwnProperty(oid)) continue;
+    var items = grupos[oid];
+    try {
+      var existe = await sb.from("ordenes_trabajo").select("id").eq("ot_id", oid).maybeSingle();
+      var ex = sbCheck(existe);
+      if (ex) { omitidas.push(oid); continue; }
+
+      var primero = items[0];
+      var sede = sedeValida(primero.sede) || "OLAS";
+      var cc = ccValido(primero.centro_costo);
+      var fechas = items.map(function (i) { return i.fecha; }).filter(Boolean).sort();
+      var fecha = fechas.length ? fechas[0] : soloFecha(new Date());
+      var total = items.reduce(function (a, i) { return a + (parseFloat(i.cantidad) || 0) * (parseFloat(i.precio_unitario) || 0); }, 0);
+
+      var insOT = await sb.from("ordenes_trabajo").insert({
+        ot_id: oid, fecha: fecha, empresa: normalizarEmpresa(primero.proveedor || ""),
+        sede_id: sede, clasificacion: null, precio_total: total, centro_costo_id: cc,
+        estado: String(primero.estado || "PENDIENTE").toUpperCase()
+      }).select("id").single();
+      var otRow = sbCheck(insOT);
+
+      var filasCosto = items.map(function (i) {
+        return {
+          ot_id: otRow.id, fecha: i.fecha || fecha, empresa: normalizarEmpresa(primero.proveedor || ""),
+          categoria_id: catNombreToId[String(i.categoria || "").trim()] || null,
+          tipo: i.tipo || "", labor: i.labor || "", descripcion: i.descripcion || "",
+          ubicacion: i.ubicacion || "", cantidad: parseFloat(i.cantidad) || 0,
+          precio_unitario: parseFloat(i.precio_unitario) || 0,
+          sede_id: sede, centro_costo_id: cc
+        };
+      });
+      var insCostos = await sb.from("costos_mantenimiento").insert(filasCosto);
+      sbCheck(insCostos);
+      lineasInsertadas += filasCosto.length;
+      creadas.push(oid);
+
+      await procesarItemsInvernaderoJS(items, fecha);
+    } catch (err) {
+      errores.push({ ot_id: oid, msg: err.message });
+    }
+  }
+
+  return { ok: true, creadas: creadas, omitidas: omitidas, errores: errores, lineas: lineasInsertadas };
+};
+
 
 var OT={}, pdfB64="", actasFiles=[];
 var centrosCostosData = [];
@@ -531,7 +590,7 @@ function rmActa(i){actasFiles.splice(i,1);renderActasList()}
 function fIco(n){var e=n.split('.').pop().toLowerCase();return{pdf:'📄',jpg:'🖼',jpeg:'🖼',png:'🖼',doc:'📝',docx:'📝'}[e]||'📎'}
 
 function goTab(n){
-  [1,2,3,4,5,6].forEach(function(i){document.getElementById("s"+i).classList.remove("on");document.getElementById("nt"+i).classList.remove("on")});
+  [1,2,3,4,5,6,7].forEach(function(i){document.getElementById("s"+i).classList.remove("on");document.getElementById("nt"+i).classList.remove("on")});
   document.getElementById("s"+n).classList.add("on");document.getElementById("nt"+n).classList.add("on");
   window.scrollTo({top:0,behavior:"smooth"});
   if(n===3) poblarCatFiltro();
@@ -1703,3 +1762,128 @@ document.getElementById("formEner").addEventListener("submit", function(ev){
     }
   );
 });
+
+// ================================================================
+//  MÓDULO: CARGA MASIVA
+// ================================================================
+var cmFilas = [];   // filas parseadas del Excel, listas para enviar
+
+function fechaCM(v){
+  if (v instanceof Date) return v.toISOString().split("T")[0];
+  if (v === undefined || v === null) return "";
+  return String(v).trim();
+}
+
+function procesarCargaMasiva(){
+  var input = document.getElementById("cmFile");
+  var file = input.files[0];
+  if(!file){ toast("⚠️ Selecciona un archivo primero","wn2"); return; }
+
+  var reader = new FileReader();
+  reader.onload = function(e){
+    var data = new Uint8Array(e.target.result);
+    var wb;
+    try{ wb = XLSX.read(data, {type:"array", cellDates:true}); }
+    catch(err){ toast("❌ No se pudo leer el archivo: "+err.message,"err2"); return; }
+
+    var hoja = wb.Sheets["Carga"] || wb.Sheets[wb.SheetNames[0]];
+    if(!hoja){ toast("❌ No encontré una hoja con datos en el archivo","err2"); return; }
+
+    var raw = XLSX.utils.sheet_to_json(hoja, {defval:""});
+    cmFilas = raw.map(function(r){
+      return {
+        ot_id: String(r.ot_id||"").trim(),
+        fecha: fechaCM(r.fecha),
+        proveedor: String(r.proveedor||"").trim(),
+        sede: String(r.sede||"").trim().toUpperCase(),
+        centro_costo: String(r.centro_costo||"").trim(),
+        categoria: String(r.categoria||"").trim(),
+        tipo: String(r.tipo||"").trim(),
+        labor: String(r.labor||"").trim(),
+        descripcion: String(r.descripcion||"").trim(),
+        ubicacion: String(r.ubicacion||"").trim(),
+        cantidad: parseFloat(r.cantidad)||0,
+        precio_unitario: parseFloat(r.precio_unitario)||0,
+        estado: String(r.estado||"PENDIENTE").trim().toUpperCase()
+      };
+    }).filter(function(r){ return r.ot_id; });
+
+    if(!cmFilas.length){ toast("⚠️ El archivo no tiene filas con ot_id","wn2"); return; }
+    renderPreviewCargaMasiva();
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function renderPreviewCargaMasiva(){
+  var grupos = {};
+  cmFilas.forEach(function(f){ (grupos[f.ot_id] = grupos[f.ot_id]||[]).push(f); });
+
+  var otsExistentes = {};
+  (allOTs||[]).forEach(function(o){ otsExistentes[o.ot_id] = true; });
+
+  var tbody = document.getElementById("cmTbody"); tbody.innerHTML="";
+  var totalItems = 0, totalOTs = 0, conAlerta = 0;
+
+  Object.keys(grupos).forEach(function(oid){
+    var items = grupos[oid];
+    var sub = items.reduce(function(a,i){ return a + i.cantidad*i.precio_unitario; },0);
+    var cats = uniq(items.map(function(i){return i.categoria}).filter(Boolean));
+    var sede = items[0].sede;
+    var alertas = [];
+    if(otsExistentes[oid]) alertas.push("Ya existe — se omitirá");
+    if(sede!=="OLAS" && sede!=="MANANTIALES") alertas.push("Sede inválida: \""+sede+"\"");
+    cats.forEach(function(c){ if(!catNombreToId[c]) alertas.push("Categoría no está en el catálogo: \""+c+"\""); });
+    if(items.some(function(i){return !i.centro_costo;})) alertas.push("Centro de costo vacío en alguna fila");
+
+    if(alertas.length) conAlerta++;
+    totalItems += items.length; totalOTs++;
+
+    var tr = document.createElement("tr");
+    if(alertas.length) tr.style.background = "var(--danger-bg)";
+    tr.innerHTML =
+      '<td class="mono" style="font-weight:600">'+esc(oid)+'</td>'+
+      '<td>'+esc(items[0].proveedor)+'</td>'+
+      '<td>'+esc(sede)+'</td>'+
+      '<td style="font-size:0.75rem">'+esc(cats.join(", ")||"—")+'</td>'+
+      '<td class="r">'+items.length+'</td>'+
+      '<td class="r">'+fmtCOP(sub)+'</td>'+
+      '<td>'+esc(items[0].estado)+'</td>'+
+      '<td style="font-size:0.7rem;color:'+(alertas.length?'var(--danger)':'var(--success)')+'">'+(alertas.length?("⚠ "+esc(alertas.join(" · "))):"✓ Lista para cargar")+'</td>';
+    tbody.appendChild(tr);
+  });
+
+  document.getElementById("cmResumen").textContent = totalOTs+" cotización(es) · "+totalItems+" ítem(s) · "+conAlerta+" con alerta";
+  document.getElementById("cmAviso").textContent = conAlerta
+    ? "Las filas con alerta igual se pueden cargar: las que 'ya existen' se omiten solas, pero corrige categoría/sede antes de confirmar si aplica."
+    : "Todo se ve correcto.";
+  document.getElementById("cmPreviewCard").style.display = "block";
+  document.getElementById("cmResultCard").style.display = "none";
+}
+
+function confirmarCargaMasiva(){
+  if(!cmFilas.length) return;
+  setB("btnCM","spCM","bCMt",true,"Cargando…");
+  gsr("cargaMasiva", cmFilas,
+    function(res){
+      setB("btnCM","spCM","bCMt",false,"✅ Confirmar carga");
+      if(!res||!res.ok){ toast("❌ Error en la carga","err2"); return; }
+      var html = '<div style="display:flex;flex-direction:column;gap:0.5rem;font-size:0.875rem;">'+
+        '<div>✅ <b>'+res.creadas.length+'</b> cotización(es) creada(s), <b>'+res.lineas+'</b> línea(s) de costo insertadas.</div>';
+      if(res.omitidas && res.omitidas.length) html += '<div>↷ Omitidas (ya existían): '+esc(res.omitidas.join(", "))+'</div>';
+      if(res.errores && res.errores.length){
+        html += '<div style="color:var(--danger)">❌ Con error:</div><ul style="margin:0;padding-left:1.25rem;color:var(--danger);font-size:0.8125rem;">';
+        res.errores.forEach(function(e){ html += '<li>'+esc(e.ot_id)+': '+esc(e.msg)+'</li>'; });
+        html += '</ul>';
+      }
+      html += '</div>';
+      document.getElementById("cmResultBody").innerHTML = html;
+      document.getElementById("cmResultCard").style.display = "block";
+      document.getElementById("cmPreviewCard").style.display = "none";
+      cmFilas = [];
+      document.getElementById("cmFile").value = "";
+      toast("✅ Carga masiva completada","ok2");
+      cargarRegs(); cargarAnalitica();
+    },
+    function(err){ setB("btnCM","spCM","bCMt",false,"✅ Confirmar carga"); toast("❌ "+err.message,"err2"); }
+  );
+}
