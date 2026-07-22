@@ -1,37 +1,471 @@
 pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
 // ====================================================================
-// CONEXIÓN API REAL (GITHUB -> GOOGLE)
+//  CONEXIÓN SUPABASE — reemplaza Google Apps Script
 // ====================================================================
-// PEGA AQUÍ TU LINK DE GOOGLE APPS SCRIPT:
-var SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzSlNiYG3N4b1kRsXXHTIDjnWLfOviEyHiK0OkHJKW524mM-AtPOnQQV8oPjOmp5TRP/exec";
+var SUPABASE_URL = "https://iozqlulwwlfkqscunzzj.supabase.co";
+var SUPABASE_KEY = "sb_publishable_CCKRZDa7Lzdgqi7Ns8EwXw_2XnibYkO";
+var sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
+function sbCheck(res){ if(res && res.error) throw new Error(res.error.message || "Error de Supabase"); return res.data; }
+
+// Mismo contrato que antes: gsr(fn, args, onSuccess, onError)
 function gsr(fn, args, onSuccess, onError) {
-  fetch(SCRIPT_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'text/plain;charset=utf-8'
-    },
-    body: JSON.stringify({ funcion: fn, parametros: args })
-  })
-  .then(function(respuesta) {
-    return respuesta.json();
-  })
-  .then(function(data) {
-    if (data && data.error) {
-      if (onError) onError(new Error(data.error));
-      else toast("❌ Error del servidor: " + data.error, "err2");
-    } else {
-      if (onSuccess) onSuccess(data);
-    }
-  })
-  .catch(function(error) {
-    console.error("Error de conexión:", error);
-    if (onError) onError(error);
-    else toast("❌ Error de red al contactar a Google", "err2");
-  });
+  var handler = SB[fn];
+  if (!handler) { var e = new Error("Función no implementada: " + fn); if (onError) onError(e); else console.error(e); return; }
+  Promise.resolve().then(function () { return handler(args); })
+    .then(function (data) { if (onSuccess) onSuccess(data); })
+    .catch(function (err) {
+      console.error("[" + fn + "]", err);
+      if (onError) onError(err);
+      else toast("❌ " + err.message, "err2");
+    });
 }
+
+// ---- Caches de catálogo (nombre <-> id) ----
+var catNombreToId = {}, catIdToNombre = {};
+var ccCache = [];       // se llena en SB.getCentrosCostos
+var equiposCacheAll = null; // cache perezosa de TODOS los equipos (para resolver equipo_id)
+
+var DIM_SEDE = {
+  "MANANTIALES": { nave: 707.2, medianave: 353.6 },
+  "OLAS":        { nave: 462.4, medianave: 231.2 }
+};
+
+function parseFechaJS(v) {
+  if (!v) return null;
+  var d = new Date(v);
+  return isNaN(d.getTime()) ? null : d;
+}
+function alertaEstadoJS(fechaProg, hoy) {
+  if (!fechaProg) return { estado: "sin_fecha", label: "Sin programar", dias: null };
+  fechaProg = new Date(fechaProg); fechaProg.setHours(0, 0, 0, 0);
+  var dias = Math.floor((fechaProg - hoy) / 86400000);
+  if (dias < 0) return { estado: "vencido", label: "Vencido hace " + Math.abs(dias) + " días", dias: dias };
+  if (dias <= 30) return { estado: "proximo", label: "En " + dias + " días", dias: dias };
+  return { estado: "ok", label: "En " + dias + " días", dias: dias };
+}
+function soloFecha(d) { return d ? new Date(d).toISOString().split("T")[0] : ""; }
+
+async function resolverEquipoId(codigo, descripcion) {
+  codigo = String(codigo || "").trim();
+  if (!codigo) return null;
+  if (!equiposCacheAll) {
+    var r = await sb.from("equipos").select("id, codigo, descripcion");
+    equiposCacheAll = sbCheck(r) || [];
+  }
+  var m = equiposCacheAll.find(function (e) { return String(e.codigo || "").trim() === codigo; });
+  return m ? m.id : null;
+}
+function ccValido(cc) {
+  cc = String(cc || "").trim();
+  if (!cc) return null;
+  return ccCache.some(function (c) { return c.id === cc; }) ? cc : null;
+}
+function sedeValida(s) {
+  s = String(s || "").trim().toUpperCase();
+  return (s === "OLAS" || s === "MANANTIALES") ? s : null;
+}
+
 // ====================================================================
+//  SB.* — un handler por cada función que antes vivía en codigo.gs
+// ====================================================================
+var SB = {};
+
+// ---- ÓRDENES DE TRABAJO ----
+
+SB.crearOT = async function (data) {
+  var sede = sedeValida(data.sede) || "OLAS";
+  var cc = ccValido(data.centro_costos);
+  var ins = await sb.from("ordenes_trabajo").insert({
+    ot_id: String(data.ot_id).trim(),
+    fecha: data.fecha,
+    empresa: normalizarEmpresa(data.empresa || ""),
+    sede_id: sede,
+    clasificacion: data.clasificacion || null,
+    precio_total: parseFloat(data.precio_total) || 0,
+    centro_costo_id: cc,
+    estado: "PENDIENTE"
+  }).select("id").single();
+  var row = sbCheck(ins);
+
+  // Línea de costo inicial (placeholder), igual que guardarCostoInicial en Apps Script
+  var hoy = data.fecha || soloFecha(new Date());
+  await sb.from("costos_mantenimiento").insert({
+    ot_id: row.id,
+    fecha: hoy,
+    empresa: normalizarEmpresa(data.empresa || ""),
+    descripcion: "Registro inicial OT",
+    ubicacion: "GENERAL",
+    cantidad: 1,
+    precio_unitario: parseFloat(data.precio_total) || 0,
+    sede_id: sede,
+    centro_costo_id: cc
+  });
+  return { ok: true, msg: "OT creada exitosamente" };
+};
+
+SB.getOTs = async function () {
+  var r = await sb.from("ordenes_trabajo").select("*").order("creado_en", { ascending: false });
+  var rows = sbCheck(r) || [];
+  return rows.map(function (o) {
+    return {
+      ot_id: o.ot_id, id_interno: o.id, fecha: o.fecha,
+      empresa: normalizarEmpresa(o.empresa || ""), sede: o.sede_id,
+      clasificacion: o.clasificacion || "", observaciones: o.observaciones || "",
+      precio_total: parseFloat(o.precio_total) || 0, centro_costos: o.centro_costo_id || "",
+      estado: o.estado || "PENDIENTE", archivo_pdf: o.archivo_pdf_url || "",
+      actas: [], actas_count: 0
+    };
+  });
+};
+
+SB.getItemsOT = async function (ot_id) {
+  ot_id = String(ot_id).trim();
+  var otR = await sb.from("ordenes_trabajo").select("id").eq("ot_id", ot_id).single();
+  var ot = sbCheck(otR);
+  if (!ot) return [];
+  var r = await sb.from("costos_mantenimiento")
+    .select("*, categorias(nombre), equipos(codigo, descripcion)")
+    .eq("ot_id", ot.id);
+  var rows = sbCheck(r) || [];
+  return rows.filter(function (c) { return c.descripcion !== "Registro inicial OT"; })
+    .map(function (c) {
+      return {
+        categoria: c.categorias ? c.categorias.nombre : "", tipo: c.tipo || "", labor: c.labor || "",
+        descripcion: c.descripcion || "", ubicacion: c.ubicacion || "",
+        cantidad: parseFloat(c.cantidad) || 0, precio: parseFloat(c.precio_unitario) || 0,
+        total_linea: parseFloat(c.total_linea) || 0,
+        equipo_cod: c.equipos ? c.equipos.codigo : "", equipo_desc: c.equipos ? c.equipos.descripcion : ""
+      };
+    });
+};
+
+SB.saveDetalle = async function (payload) {
+  var items = payload.items || [];
+  var ot_id = String(payload.ot_id).trim();
+  var otR = await sb.from("ordenes_trabajo").select("id").eq("ot_id", ot_id).single();
+  var ot = sbCheck(otR);
+  if (!ot) throw new Error("OT no encontrada: " + ot_id);
+
+  await sb.from("costos_mantenimiento").delete().eq("ot_id", ot.id);
+
+  var hoy = soloFecha(new Date());
+  var filas = [];
+  for (var i = 0; i < items.length; i++) {
+    var item = items[i];
+    var cant = parseFloat(item.cantidad) || 0;
+    var prec = parseFloat(item.precio) || 0;
+    var fechaItem = item.fecha_ot || hoy;
+    var eqId = await resolverEquipoId(item.equipo_cod, item.equipo_desc);
+    filas.push({
+      ot_id: ot.id, fecha: fechaItem, empresa: item.empresa || "",
+      categoria_id: catNombreToId[item.categoria] || null, tipo: item.tipo || "", labor: item.labor || "",
+      descripcion: item.descripcion || "", ubicacion: item.ubicacion || "", equipo_id: eqId,
+      cantidad: cant, precio_unitario: prec, adjunto: "",
+      sede_id: sedeValida(item.sede), centro_costo_id: ccValido(item.centro_costos)
+    });
+  }
+  if (filas.length) { var insR = await sb.from("costos_mantenimiento").insert(filas); sbCheck(insR); }
+
+  await procesarItemsInvernaderoJS(items, items.length && items[0].fecha_ot ? items[0].fecha_ot : hoy);
+  return { ok: true };
+};
+
+SB.saveEditarOT = async function (datos) {
+  var sede = sedeValida(datos.sede);
+  var cc = ccValido(datos.centro_costos);
+  var upd = await sb.from("ordenes_trabajo").update({
+    ot_id: datos.ot_id, fecha: datos.fecha, empresa: normalizarEmpresa(datos.empresa || ""),
+    sede_id: sede || "OLAS", clasificacion: datos.clasificacion || null,
+    observaciones: datos.observaciones || "", precio_total: parseFloat(datos.precio_total) || 0,
+    centro_costo_id: cc, estado: datos.estado
+  }).eq("ot_id", datos.ot_id_original).select("id");
+  var rows = sbCheck(upd);
+  if (!rows || !rows.length) throw new Error("OT no encontrada: " + datos.ot_id_original);
+  return { ok: true };
+};
+
+SB.deleteOT = async function (ot_id) {
+  var del = await sb.from("ordenes_trabajo").delete().eq("ot_id", String(ot_id).trim());
+  sbCheck(del);
+  return { ok: true };
+};
+
+// ---- CATÁLOGO ----
+
+SB.getCatalogo = async function () {
+  var r = await sb.from("categorias").select("id, nombre, tipos_actividad(id, nombre)").order("nombre");
+  var rows = sbCheck(r) || [];
+  var out = {};
+  catNombreToId = {}; catIdToNombre = {};
+  rows.forEach(function (c) {
+    catNombreToId[c.nombre] = c.id; catIdToNombre[c.id] = c.nombre;
+    out[c.nombre] = (c.tipos_actividad || []).map(function (t) { return t.nombre; }).sort();
+  });
+  return out;
+};
+
+SB.saveCatalogo = async function (catalogoObj) {
+  // Sincroniza la hoja completa de categorías/tipos contra lo que ya hay en la BD.
+  var r = await sb.from("categorias").select("id, nombre, tipos_actividad(id, nombre)");
+  var actuales = sbCheck(r) || [];
+  var actualesPorNombre = {}; actuales.forEach(function (c) { actualesPorNombre[c.nombre] = c; });
+
+  for (var nombre in catalogoObj) {
+    if (!catalogoObj.hasOwnProperty(nombre)) continue;
+    var tiposNuevos = catalogoObj[nombre] || [];
+    var cat = actualesPorNombre[nombre];
+    var catId;
+    if (!cat) {
+      var insC = await sb.from("categorias").insert({ nombre: nombre }).select("id").single();
+      catId = sbCheck(insC).id;
+      cat = { id: catId, nombre: nombre, tipos_actividad: [] };
+    } else { catId = cat.id; }
+    catNombreToId[nombre] = catId; catIdToNombre[catId] = nombre;
+
+    var tiposActuales = (cat.tipos_actividad || []).map(function (t) { return t.nombre; });
+    var aInsertar = tiposNuevos.filter(function (t) { return tiposActuales.indexOf(t) < 0; });
+    var aBorrar = (cat.tipos_actividad || []).filter(function (t) { return tiposNuevos.indexOf(t.nombre) < 0; });
+    for (var i = 0; i < aInsertar.length; i++) {
+      await sb.from("tipos_actividad").insert({ categoria_id: catId, nombre: aInsertar[i] });
+    }
+    for (var j = 0; j < aBorrar.length; j++) {
+      await sb.from("tipos_actividad").delete().eq("id", aBorrar[j].id);
+    }
+  }
+  // Categorías que ya no están en el objeto local: se intentan borrar (si tienen
+  // costos ligados, la base de datos rechaza el borrado y simplemente se ignoran).
+  for (var nombreDB in actualesPorNombre) {
+    if (!catalogoObj.hasOwnProperty(nombreDB)) {
+      try { await sb.from("categorias").delete().eq("id", actualesPorNombre[nombreDB].id); }
+      catch (e) { /* tiene costos históricos ligados: se conserva */ }
+    }
+  }
+  return { ok: true };
+};
+
+// ---- CENTROS DE COSTO / EQUIPOS / UBICACIONES ----
+
+SB.getCentrosCostos = async function () {
+  var r = await sb.from("centros_costos").select("*");
+  var rows = sbCheck(r) || [];
+  ccCache = rows;
+  return rows.map(function (c) {
+    return { id: c.id, sede: c.sede_id, clasificacion: c.clasificacion, descripcion: c.descripcion || "", estado: c.estado || "", presupuesto: parseFloat(c.presupuesto) || 0 };
+  });
+};
+
+SB.getEquiposPorSede = async function (sede) {
+  var q = sb.from("equipos").select("*");
+  if (sede) q = q.eq("sede_id", sedeValida(sede) || sede);
+  var r = await q;
+  var rows = sbCheck(r) || [];
+  return rows.map(function (e) {
+    return { codigo: e.codigo || "", descripcion: e.descripcion || "", referencia: e.referencia || "", ubicacion: e.ubicacion || "", marca: e.marca || "", sede: e.sede_id || "" };
+  });
+};
+
+SB.getUbicacionesPorSede = async function (data) {
+  var categoria = String(data.categoria || "").toLowerCase();
+  if (categoria.indexOf("invernadero") < 0) return [];
+  var q = sb.from("invernaderos_bloques").select("ubicacion");
+  if (data.sede) q = q.eq("sede_id", sedeValida(data.sede) || data.sede);
+  var r = await q;
+  var rows = sbCheck(r) || [];
+  return rows.map(function (x) { return x.ubicacion; }).filter(Boolean);
+};
+
+SB.getUbicacionesMecanicos = async function (sede) {
+  var q = sb.from("equipos").select("ubicacion");
+  if (sede) q = q.eq("sede_id", sedeValida(sede) || sede);
+  var r = await q;
+  var rows = sbCheck(r) || [];
+  var set = {};
+  rows.forEach(function (x) { var u = String(x.ubicacion || "").trim(); if (u) set[u] = true; });
+  return Object.keys(set).sort();
+};
+
+// ---- ANALÍTICA / DASHBOARD ----
+
+SB.getAnalitica = async function () {
+  var rOT = await sb.from("ordenes_trabajo").select("ot_id, fecha, empresa, sede_id, estado, precio_total");
+  var ots = (sbCheck(rOT) || []).map(function (o) {
+    return { ot_id: o.ot_id, fecha: o.fecha, empresa: normalizarEmpresa(o.empresa || ""), sede: o.sede_id, estado: o.estado, precio_total: parseFloat(o.precio_total) || 0 };
+  });
+  var rC = await sb.from("costos_mantenimiento").select("fecha, empresa, tipo, labor, descripcion, cantidad, precio_unitario, total_linea, sede_id, centro_costo_id, categorias(nombre), ordenes_trabajo!inner(ot_id)");
+  var costos = (sbCheck(rC) || []).map(function (c) {
+    return {
+      ot_id: c.ordenes_trabajo.ot_id, fecha: c.fecha, empresa: normalizarEmpresa(c.empresa || ""),
+      categoria: c.categorias ? c.categorias.nombre : "", tipo: c.tipo || "", labor: c.labor || "",
+      descripcion: c.descripcion || "", cantidad: parseFloat(c.cantidad) || 0, precio: parseFloat(c.precio_unitario) || 0,
+      total_linea: parseFloat(c.total_linea) || 0, sede: c.sede_id || "", cc: c.centro_costo_id || ""
+    };
+  });
+  return { ots: ots, costos: costos };
+};
+
+SB.getAnaliticaEquipos = async function () {
+  var r = await sb.from("costos_mantenimiento")
+    .select("fecha, cantidad, total_linea, sede_id, categorias(nombre), equipos!inner(codigo, descripcion), ordenes_trabajo!inner(ot_id)")
+    .not("equipo_id", "is", null);
+  var rows = sbCheck(r) || [];
+  return rows.map(function (c) {
+    return {
+      ot_id: c.ordenes_trabajo.ot_id, fecha: c.fecha, categoria: c.categorias ? c.categorias.nombre : "",
+      tipo: "", descripcion: "", sede: c.sede_id || "", equipo_cod: c.equipos.codigo || "",
+      equipo_desc: c.equipos.descripcion || "", total_linea: parseFloat(c.total_linea) || 0
+    };
+  });
+};
+
+SB.getAnaliticaInvernaderos = async function () {
+  var rInv = await sb.from("invernaderos_bloques").select("sede_id, ubicacion, num_naves, num_medianave");
+  var bloques = sbCheck(rInv) || [];
+  var bloquesMap = {};
+  bloques.forEach(function (b) {
+    var dim = DIM_SEDE[b.sede_id] || { nave: 462.4, medianave: 231.2 };
+    var m2 = (parseFloat(b.num_naves) || 0) * dim.nave + (parseFloat(b.num_medianave) || 0) * dim.medianave;
+    bloquesMap[b.sede_id + "|" + String(b.ubicacion || "").toUpperCase()] = { naves: parseFloat(b.num_naves) || 0, medianaves: parseFloat(b.num_medianave) || 0, m2: m2 };
+  });
+  var rC = await sb.from("costos_mantenimiento")
+    .select("fecha, tipo, labor, descripcion, cantidad, precio_unitario, total_linea, sede_id, ubicacion, categorias!inner(nombre), ordenes_trabajo!inner(ot_id)")
+    .ilike("categorias.nombre", "%invernadero%");
+  var rows = sbCheck(rC) || [];
+  return rows.map(function (r) {
+    var key = (r.sede_id || "") + "|" + String(r.ubicacion || "").toUpperCase();
+    var info = bloquesMap[key] || { naves: 0, medianaves: 0, m2: 0 };
+    return {
+      ot_id: r.ordenes_trabajo.ot_id, fecha: r.fecha, sede: r.sede_id || "", ubicacion: r.ubicacion || "",
+      tipo: r.tipo || "", labor: r.labor || "", descripcion: r.descripcion || "",
+      cantidad: parseFloat(r.cantidad) || 0, precio: parseFloat(r.precio_unitario) || 0, total_linea: parseFloat(r.total_linea) || 0,
+      m2_bloque: info.m2, naves: info.naves, medianaves: info.medianaves
+    };
+  });
+};
+
+SB.getResumenInvernaderos = async function () {
+  var rInv = await sb.from("invernaderos_bloques").select("*");
+  var bloques = sbCheck(rInv) || [];
+  var rC = await sb.from("costos_mantenimiento")
+    .select("fecha, ubicacion, sede_id, tipo, categorias!inner(nombre)")
+    .ilike("categorias.nombre", "%invernadero%")
+    .ilike("tipo", "%lavado%");
+  var costosLavado = (sbCheck(rC) || []).filter(function (c) { return String(c.tipo || "").toLowerCase().indexOf("cubiert") >= 0; });
+
+  var hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+  var out = [];
+  bloques.forEach(function (b) {
+    var sede = b.sede_id, ubic = b.ubicacion;
+    var fEjeCambio = parseFechaJS(b.fecha_eje_cambio);
+    var conteoReal = 0;
+    costosLavado.forEach(function (c) {
+      if (String(c.sede_id || "").toUpperCase() !== String(sede).toUpperCase()) return;
+      if (String(c.ubicacion || "").toUpperCase() !== String(ubic).toUpperCase()) return;
+      var fCosto = parseFechaJS(c.fecha);
+      if (fEjeCambio && fCosto && fCosto <= fEjeCambio) return;
+      conteoReal++;
+    });
+    var reqCambio = conteoReal >= 3;
+    var aC = alertaEstadoJS(parseFechaJS(b.fecha_prog_cambio), hoy);
+    var aL = reqCambio ? { estado: "cambio_req", label: "Requiere cambio (" + conteoReal + " lavados)", dias: 0 } : alertaEstadoJS(parseFechaJS(b.fecha_prog_lavado), hoy);
+    var estados = [aC.estado, aL.estado];
+    var global = estados.indexOf("vencido") >= 0 ? "vencido" : estados.indexOf("cambio_req") >= 0 ? "cambio_req" : estados.indexOf("proximo") >= 0 ? "proximo" : "ok";
+    out.push({
+      sede: sede, ubicacion: ubic, num_naves: parseFloat(b.num_naves) || 0, num_medianave: parseFloat(b.num_medianave) || 0,
+      fecha_prog_cambio: soloFecha(b.fecha_prog_cambio), fecha_eje_cambio: soloFecha(b.fecha_eje_cambio),
+      fecha_prog_lavado: soloFecha(b.fecha_prog_lavado), fecha_eje_lavado: soloFecha(b.fecha_eje_lavado),
+      conteo_lavados: conteoReal, requiere_cambio: reqCambio, alerta_cambio: aC, alerta_lavado: aL, alerta_global: global
+    });
+  });
+  var v = 0, p = 0, cr = 0, ok = 0;
+  out.forEach(function (b) { if (b.alerta_global === "vencido") v++; else if (b.alerta_global === "cambio_req") cr++; else if (b.alerta_global === "proximo") p++; else ok++; });
+  return { total: out.length, vencidos: v, proximos: p, cambios_req: cr, ok: ok, bloques: out };
+};
+
+// Puerto de procesarItemsInvernadero + registrarEjecucionInvernadero (Apps Script -> JS)
+async function procesarItemsInvernaderoJS(items, fecha_ot) {
+  var procesados = {};
+  for (var i = 0; i < items.length; i++) {
+    var item = items[i];
+    if (String(item.categoria || "").toLowerCase().indexOf("invernadero") < 0) continue;
+    var tipo = String(item.tipo || "").toLowerCase();
+    var esCambio = tipo.indexOf("cambio") >= 0 && tipo.indexOf("cubiert") >= 0;
+    var esLavado = tipo.indexOf("lavado") >= 0 && tipo.indexOf("cubiert") >= 0;
+    if (!esCambio && !esLavado) continue;
+    var key = (item.sede || "") + "|" + (item.ubicacion || "");
+    if (procesados[key]) continue;
+    procesados[key] = true;
+
+    var sede = sedeValida(item.sede); if (!sede) continue;
+    var ubic = String(item.ubicacion || "").trim(); if (!ubic) continue;
+    var rB = await sb.from("invernaderos_bloques").select("*").eq("sede_id", sede).ilike("ubicacion", ubic).maybeSingle();
+    var bloque = sbCheck(rB);
+    if (!bloque) continue;
+    var fecha = parseFechaJS(fecha_ot) || new Date();
+
+    if (esCambio) {
+      var pC = new Date(fecha); pC.setFullYear(pC.getFullYear() + 2);
+      var pL = new Date(fecha); pL.setMonth(pL.getMonth() + 6);
+      await sb.from("invernaderos_bloques").update({
+        fecha_eje_cambio: soloFecha(fecha), fecha_prog_cambio: soloFecha(pC), fecha_prog_lavado: soloFecha(pL), fecha_eje_lavado: null
+      }).eq("id", bloque.id);
+    } else if (esLavado) {
+      var rC = await sb.from("costos_mantenimiento")
+        .select("fecha, ubicacion, sede_id, tipo, categorias!inner(nombre)")
+        .ilike("categorias.nombre", "%invernadero%").ilike("tipo", "%lavado%");
+      var lavados = (sbCheck(rC) || []).filter(function (c) { return String(c.tipo || "").toLowerCase().indexOf("cubiert") >= 0; });
+      var fEjeC = parseFechaJS(bloque.fecha_eje_cambio);
+      var conteo = 0;
+      lavados.forEach(function (c) {
+        if (String(c.sede_id || "").toUpperCase() !== sede) return;
+        if (String(c.ubicacion || "").trim().toLowerCase() !== ubic.toLowerCase()) return;
+        var fC = parseFechaJS(c.fecha);
+        if (fEjeC && fC && fC <= fEjeC) return;
+        conteo++;
+      });
+      var nuevoConteo = conteo + 1;
+      var patch = { fecha_eje_lavado: soloFecha(fecha) };
+      if (nuevoConteo < 3) { var pL2 = new Date(fecha); pL2.setMonth(pL2.getMonth() + 6); patch.fecha_prog_lavado = soloFecha(pL2); }
+      else { patch.fecha_prog_lavado = null; }
+      await sb.from("invernaderos_bloques").update(patch).eq("id", bloque.id);
+    }
+  }
+}
+
+// ---- ENERGÍA ----
+
+SB.getEnergia = async function () {
+  var r = await sb.from("energia").select("*");
+  var rows = sbCheck(r) || [];
+  return rows.map(function (e) {
+    return { id_mov: e.id, sede: e.sede_id, anio: e.anio, mes: e.mes, consumo_kwh: parseFloat(e.consumo_kwh) || 0, generacion_fv_kwh: parseFloat(e.generacion_fv_kwh) || 0, valor_factura: parseFloat(e.valor_factura) || 0, observaciones: e.observaciones || "", fecha_reg: e.creado_en };
+  });
+};
+
+SB.guardarEnergia = async function (data) {
+  var sede = sedeValida(data.sede);
+  var anio = parseInt(data.anio, 10), mes = parseInt(data.mes, 10);
+  if (!sede || !anio || !mes) return { ok: false, msg: "Sede, año y mes son obligatorios" };
+  var fila = {
+    sede_id: sede, anio: anio, mes: mes,
+    consumo_kwh: parseFloat(data.consumo_kwh) || 0, generacion_fv_kwh: parseFloat(data.generacion_fv_kwh) || 0,
+    valor_factura: parseFloat(data.valor_factura) || 0, observaciones: String(data.observaciones || "").trim()
+  };
+  var idMov = String(data.id_mov || "").trim();
+  var res;
+  if (idMov) res = await sb.from("energia").update(fila).eq("id", idMov);
+  else res = await sb.from("energia").upsert(fila, { onConflict: "sede_id,anio,mes" });
+  sbCheck(res);
+  return { ok: true, msg: idMov ? "Registro actualizado" : "Registro guardado" };
+};
+
+SB.eliminarEnergia = async function (id_mov) {
+  var res = await sb.from("energia").delete().eq("id", String(id_mov).trim());
+  sbCheck(res);
+  return { ok: true };
+};
+
 
 var OT={}, pdfB64="", actasFiles=[];
 var centrosCostosData = [];
@@ -39,14 +473,7 @@ var allOTs=[], filtOTs=[], pgOTs=1, pgSz=15;
 var otData=[], costoData=[];
 var charts={};
 var currentEditOT=null;
-var catalogo={
-  "Invernaderos":  ["Cambio de cubiertas","Lavado de cubiertas","Reparación estructural","Instalación sistema riego","Mantenimiento ventilación"],
-  "Mecánicos":     ["Cambio de aceite","Revisión de frenos","Reparación motor","Mantenimiento preventivo","Cambio de correas"],
-  "Zonas Verdes":  ["Poda de árboles","Siembra de césped","Control de plagas","Fertilización","Riego"],
-  "Producción":    ["Calibración de equipos","Limpieza de maquinaria","Reparación de línea","Mantenimiento preventivo","Cambio de piezas"],
-  "Obras Civiles": ["Pintura","Resane de paredes","Impermeabilización","Reparación de pisos","Construcción menor"],
-  "Eléctricos":    ["Revisión tablero","Cambio de luminarias","Instalación tomacorrientes","Mantenimiento UPS","Cableado"]
-};
+var catalogo={}; // se carga desde Supabase (tablas categorias + tipos_actividad) al iniciar
 var labores=["Mano de obra","Material","Repuesto","Servicio","Transporte","Otro"];
 var CL=["#3b82f6","#10b981","#f59e0b","#8b5cf6","#ec4899","#06b6d4","#f97316","#84cc16","#ef4444","#a78bfa"];
 
@@ -188,24 +615,23 @@ document.getElementById("formOT").addEventListener("submit",function(e){
 });
 
 function subirPDF(file, ot_id, onDone){
-  var CHUNK = 400000; 
-  var reader = new FileReader();
-  reader.onload = function(){
-    var b64 = reader.result;
-    var total = b64.length;
-    var partes = [];
-    for(var i=0; i<total; i+=CHUNK){ partes.push(b64.substring(i, i+CHUNK)); }
-    var nombre = "COT_"+ot_id+".pdf";
-    function enviarChunk(idx){
-      if(idx >= partes.length){
-        gsr("ensamblarPDF", {ot_id:ot_id, nombre:nombre, total:partes.length}, function(){ toast("📄 PDF en Drive","ok2"); if(onDone)onDone(); }, function(){ if(onDone)onDone(); });
-        return;
-      }
-      gsr("recibirChunkPDF", {ot_id:ot_id, idx:idx, total:partes.length, chunk:partes[idx], nombre:nombre}, function(){ enviarChunk(idx+1); }, function(){ if(onDone)onDone(); });
-    }
-    enviarChunk(0);
-  };
-  reader.readAsDataURL(file);
+  var path = ot_id + "/" + Date.now() + "_" + file.name.replace(/[^a-zA-Z0-9._-]/g,"_");
+  sb.storage.from("ot-adjuntos").upload(path, file, { upsert: true })
+    .then(function(res){
+      if(res.error) throw res.error;
+      var pub = sb.storage.from("ot-adjuntos").getPublicUrl(path);
+      var url = pub.data.publicUrl;
+      return sb.from("ordenes_trabajo").update({ archivo_pdf_url: url }).eq("ot_id", ot_id);
+    })
+    .then(function(res){
+      if(res && res.error) throw res.error;
+      toast("📄 PDF subido","ok2");
+      if(onDone) onDone();
+    })
+    .catch(function(err){
+      toast("❌ Error subiendo PDF: "+err.message,"err2");
+      if(onDone) onDone();
+    });
 }
 
 function irCot(){
