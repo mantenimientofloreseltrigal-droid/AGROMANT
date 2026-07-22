@@ -75,10 +75,16 @@ var SB = {};
 // ---- ÓRDENES DE TRABAJO ----
 
 SB.crearOT = async function (data) {
+  var otId = String(data.ot_id).trim();
+  var existe = sbCheck(await sb.from("ordenes_trabajo").select("id").eq("ot_id", otId).maybeSingle());
+  if (existe) {
+    return { ok: false, msg: "Ya existe una cotización con el código \"" + otId + "\". Usa otro código, o edítala desde Registros si es la misma." };
+  }
+
   var sede = sedeValida(data.sede) || "OLAS";
   var cc = ccValido(data.centro_costos);
   var ins = await sb.from("ordenes_trabajo").insert({
-    ot_id: String(data.ot_id).trim(),
+    ot_id: otId,
     fecha: data.fecha,
     empresa: normalizarEmpresa(data.empresa || ""),
     sede_id: sede,
@@ -655,10 +661,31 @@ function genID(){
   document.getElementById("ot_id").value="OT-"+d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+"-"+String(Math.floor(Math.random()*9000)+1000);
 }
 
+function buscarPosibleDuplicado(empresa, fecha, precio_total){
+  var emp = normalizarEmpresa(empresa);
+  var fechaD = new Date(fecha);
+  var precio = parseFloat(precio_total) || 0;
+  if(!emp || isNaN(fechaD.getTime()) || !precio) return [];
+  return (allOTs||[]).filter(function(o){
+    if(normalizarEmpresa(o.empresa) !== emp) return false;
+    var diffDias = Math.abs((new Date(o.fecha) - fechaD) / 86400000);
+    if(diffDias > 5) return false;
+    var difPct = o.precio_total ? Math.abs(o.precio_total - precio) / o.precio_total : 1;
+    return difPct < 0.02;
+  });
+}
+
 document.getElementById("formOT").addEventListener("submit",function(e){
   e.preventDefault();
   var f=document.getElementById("arch_pdf").files[0];
   OT={ot_id:document.getElementById("ot_id").value.trim(),fecha:document.getElementById("fecha").value,empresa:normalizarEmpresa(document.getElementById("emp").value.trim()),sede:document.getElementById("sede").value.trim(),clasificacion:document.getElementById("clas").value.trim(),precio_total:document.getElementById("ptot").value||"0",centro_costos:document.getElementById("cc").value.trim(),nombre_archivo:f?f.name:""};
+
+  var posibles = buscarPosibleDuplicado(OT.empresa, OT.fecha, OT.precio_total);
+  if(posibles.length){
+    var lista = posibles.map(function(o){ return "• "+o.ot_id+" — "+o.fecha+" — "+fmtCOP(o.precio_total); }).join("\n");
+    if(!confirm("⚠️ Esto se parece a una cotización que ya existe (mismo proveedor, fecha cercana y monto similar):\n\n"+lista+"\n\n¿Seguro que quieres guardarla de todas formas?")) return;
+  }
+
   setB("btnOT","sp1","bOTt",true,"Guardando…");
   var payloadBase = Object.assign({}, OT, {archivo:"", actas:[]});
   gsr("crearOT", payloadBase,
@@ -1831,6 +1858,10 @@ function renderPreviewCargaMasiva(){
     var sede = items[0].sede;
     var alertas = [];
     if(otsExistentes[oid]) alertas.push("Ya existe — se omitirá");
+    else{
+      var similares = buscarPosibleDuplicado(items[0].proveedor, items[0].fecha, sub);
+      if(similares.length) alertas.push("Se parece a "+similares.map(function(o){return o.ot_id}).join(", ")+" (mismo proveedor/fecha/monto)");
+    }
     if(sede!=="OLAS" && sede!=="MANANTIALES") alertas.push("Sede inválida: \""+sede+"\"");
     cats.forEach(function(c){ if(!catNombreToId[c]) alertas.push("Categoría no está en el catálogo: \""+c+"\""); });
     if(items.some(function(i){return !i.centro_costo;})) alertas.push("Centro de costo vacío en alguna fila");
