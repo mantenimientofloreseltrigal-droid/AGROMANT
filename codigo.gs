@@ -733,6 +733,105 @@ function getUbicacionesMecanicos(sede) {
 }
 
 // ================================================================
+//  MÓDULO: ENERGÍA (kWh / m²)
+// ================================================================
+
+function guardarEnergia(data) {
+  try {
+    var sede = String(data.sede || "").trim().toUpperCase();
+    var anio = parseInt(data.anio, 10);
+    var mes  = parseInt(data.mes, 10);
+    if (!sede || !anio || !mes) {
+      return { ok: false, msg: "Sede, año y mes son obligatorios" };
+    }
+
+    var sh   = hoja("ENERGIA");
+    var rows = sh.getDataRange().getValues();
+    var idMov = String(data.id_mov || "").trim();
+    var rowIdx = -1;
+
+    for (var i = 1; i < rows.length; i++) {
+      var r = rows[i];
+      if (!r[0]) continue;
+      if (idMov && String(r[0]).trim() === idMov) { rowIdx = i; break; }
+      if (!idMov &&
+          String(r[1]||"").trim().toUpperCase() === sede &&
+          parseInt(r[2],10) === anio &&
+          parseInt(r[3],10) === mes) { rowIdx = i; break; }
+    }
+
+    var ahora  = fmt(new Date());
+    var idFila = idMov || (rowIdx >= 0 ? rows[rowIdx][0] : Utilities.getUuid());
+    var fila = [
+      idFila,
+      sede,
+      anio,
+      mes,
+      parseFloat(data.consumo_kwh) || 0,
+      parseFloat(data.generacion_fv_kwh) || 0,
+      parseFloat(data.valor_factura) || 0,
+      String(data.observaciones || "").trim(),
+      ahora
+    ];
+
+    if (rowIdx >= 0) {
+      sh.getRange(rowIdx + 1, 1, 1, fila.length).setValues([fila]);
+      return { ok: true, msg: "Registro actualizado" };
+    } else {
+      sh.appendRow(fila);
+      return { ok: true, msg: "Registro guardado" };
+    }
+  } catch (err) {
+    Logger.log("guardarEnergia error: " + err.message);
+    return { ok: false, msg: err.message };
+  }
+}
+
+function getEnergia() {
+  try {
+    var rows = hoja("ENERGIA").getDataRange().getValues();
+    var out = [];
+    for (var i = 1; i < rows.length; i++) {
+      var r = rows[i];
+      if (!r[0]) continue;
+      out.push({
+        id_mov:            String(r[0]),
+        sede:              String(r[1] || ""),
+        anio:              parseInt(r[2], 10)  || 0,
+        mes:               parseInt(r[3], 10)  || 0,
+        consumo_kwh:       parseFloat(r[4]) || 0,
+        generacion_fv_kwh: parseFloat(r[5]) || 0,
+        valor_factura:     parseFloat(r[6]) || 0,
+        observaciones:     String(r[7] || ""),
+        fecha_reg:         fmtFecha(r[8])
+      });
+    }
+    return out;
+  } catch (err) {
+    Logger.log("getEnergia error: " + err.message);
+    return [];
+  }
+}
+
+function eliminarEnergia(id_mov) {
+  try {
+    id_mov = String(id_mov).trim();
+    var sh = hoja("ENERGIA");
+    var rows = sh.getDataRange().getValues();
+    for (var i = 1; i < rows.length; i++) {
+      if (String(rows[i][0]).trim() === id_mov) {
+        sh.deleteRow(i + 1);
+        return { ok: true };
+      }
+    }
+    return { ok: false, msg: "Registro no encontrado" };
+  } catch (err) {
+    Logger.log("eliminarEnergia error: " + err.message);
+    return { ok: false, msg: err.message };
+  }
+}
+
+// ================================================================
 //  FUNCIONES DE AYUDA (HELPERS)
 // ================================================================
 
@@ -753,7 +852,11 @@ function hoja(nombre) {
         "PRECIO_UNITARIO","TOTAL_LINEA","ADJUNTO","FECHA_REG",
         "SEDE","MES","CC"
       ],
-      "CATALOGO": ["CATEGORIA","TIPOS_JSON"]
+      "CATALOGO": ["CATEGORIA","TIPOS_JSON"],
+      "ENERGIA": [
+        "ID_MOV","SEDE","ANIO","MES","CONSUMO_KWH","GENERACION_FV_KWH",
+        "VALOR_FACTURA","OBSERVACIONES","FECHA_REG"
+      ]
     };
     if (cabeceras[nombre]) h.appendRow(cabeceras[nombre]);
   }

@@ -104,11 +104,12 @@ function rmActa(i){actasFiles.splice(i,1);renderActasList()}
 function fIco(n){var e=n.split('.').pop().toLowerCase();return{pdf:'📄',jpg:'🖼',jpeg:'🖼',png:'🖼',doc:'📝',docx:'📝'}[e]||'📎'}
 
 function goTab(n){
-  [1,2,3,4,5].forEach(function(i){document.getElementById("s"+i).classList.remove("on");document.getElementById("nt"+i).classList.remove("on")});
+  [1,2,3,4,5,6].forEach(function(i){document.getElementById("s"+i).classList.remove("on");document.getElementById("nt"+i).classList.remove("on")});
   document.getElementById("s"+n).classList.add("on");document.getElementById("nt"+n).classList.add("on");
   window.scrollTo({top:0,behavior:"smooth"});
   if(n===3) poblarCatFiltro();
   if(n===4) setTimeout(renderCharts,120);
+  if(n===6) cargarEnergia();
 }
 
 function onSedeChange(){
@@ -864,7 +865,7 @@ function renderPresupInversion(){
   if(tb){tb.innerHTML="";filas.forEach(function(r){
     var eb=r.ejec===0?'<span class="badge pend">Sin ejecutar</span>':r.sobre?'<span class="badge brd">Sobreejecutado</span>':'<span class="badge bgr">Dentro</span>';
     var tr=document.createElement("tr"); if(r.sobre)tr.style.background="var(--danger-bg)";
-    tr.innerHTML='<td class="mono" style="font-weight:600">'+esc(r.cc.id)+'</td><td style="font-size:0.75rem">'+esc((r.cc.descripcion||"—").substring(0,30))+'</td><td>'+esc(r.cc.sede||"")+'</td><td class="r">'+fmtCOP(r.pres)+'</td><td class="r" style="color:'+(r.sobre?"var(--danger)":r.ejec>0?"var(--success)":"var(--text-muted)")+'">'+fmtCOP(r.ejec)+'</td><td class="r" style="color:'+(r.dif<0?"var(--danger)":"var(--success)")+'">'+(r.dif<0?"-":"+")+fmtCOP(Math.abs(r.dif))+'</td><td style="text-align:center">'+r.pct.toFixed(1)+"%</td><td style="text-align:center">'+eb+'</td>";
+    tr.innerHTML='<td class="mono" style="font-weight:600">'+esc(r.cc.id)+'</td><td style="font-size:0.75rem">'+esc((r.cc.descripcion||"—").substring(0,30))+'</td><td>'+esc(r.cc.sede||"")+'</td><td class="r">'+fmtCOP(r.pres)+'</td><td class="r" style="color:'+(r.sobre?"var(--danger)":r.ejec>0?"var(--success)":"var(--text-muted)")+'">'+fmtCOP(r.ejec)+'</td><td class="r" style="color:'+(r.dif<0?"var(--danger)":"var(--success)")+'">'+(r.dif<0?"-":"+")+fmtCOP(Math.abs(r.dif))+'</td><td style="text-align:center">'+r.pct.toFixed(1)+'%</td><td style="text-align:center">'+eb+'</td>';
     tb.appendChild(tr);
   });
   tb.innerHTML+='<tr style="background:var(--bg-hover);font-weight:700;"><td colspan="3">TOTAL</td><td class="r">'+fmtCOP(totPres)+'</td><td class="r">'+fmtCOP(totEjec)+'</td><td class="r">'+(totDif<0?"-":"+")+fmtCOP(Math.abs(totDif))+'</td><td style="text-align:center">'+pctGlobal.toFixed(1)+'%</td><td style="text-align:center"></td></tr>';}
@@ -1064,3 +1065,215 @@ function initTheme(){
     document.getElementById("themeBtn").innerHTML = "☀️ <span>Claro</span>";
   }
 }
+
+// ================================================================
+//  MÓDULO: ENERGÍA (kWh / m²)
+// ================================================================
+var energiaData = [];
+var enerEditId  = "";
+
+function periodoE(e){ return e.anio + "-" + String(e.mes).padStart(2,"0"); }
+function kwhM2E(e){ var m2 = M2[e.sede]||0; return m2 ? e.consumo_kwh/m2 : 0; }
+function pctFVE(e){ var t = e.consumo_kwh + e.generacion_fv_kwh; return t ? (e.generacion_fv_kwh/t*100) : 0; }
+function costoKwhE(e){ return e.consumo_kwh ? (e.valor_factura/e.consumo_kwh) : 0; }
+function fmtNumEner(n,dec){ return parseFloat(n||0).toLocaleString("es-CO",{minimumFractionDigits:dec||0,maximumFractionDigits:dec||0}); }
+
+function cargarEnergia(){
+  var ld=document.getElementById("enerLoad"); if(ld) ld.style.display="block";
+  gsr("getEnergia", {},
+    function(res){
+      energiaData = res||[];
+      if(ld) ld.style.display="none";
+      poblarFiltroAnioEnergia();
+      renderEnergia();
+    },
+    function(err){ if(ld) ld.style.display="none"; toast("❌ "+err.message,"err2"); }
+  );
+}
+
+function poblarFiltroAnioEnergia(){
+  var sel = document.getElementById("enerFiltAnio"); if(!sel) return;
+  var actual = sel.value;
+  var anios = uniq(energiaData.map(function(e){return e.anio}).filter(Boolean)).sort(function(a,b){return b-a});
+  sel.innerHTML = '<option value="">Todos los años</option>';
+  anios.forEach(function(a){ sel.innerHTML += '<option value="'+a+'">'+a+'</option>'; });
+  sel.value = actual;
+}
+
+function getEnergiaFiltrada(){
+  var sedeSel = document.getElementById("enerFiltSede"), anioSel = document.getElementById("enerFiltAnio");
+  var sede = sedeSel ? sedeSel.value : "";
+  var anio = anioSel ? anioSel.value : "";
+  return energiaData.filter(function(e){
+    if(sede && e.sede!==sede) return false;
+    if(anio && String(e.anio)!==anio) return false;
+    return true;
+  }).sort(function(a,b){ return periodoE(a) < periodoE(b) ? 1 : -1; });
+}
+
+function renderEnergia(){
+  var d = getEnergiaFiltrada();
+  renderKpisEnergia(d);
+  renderTablaEnergia(d);
+  renderChartsEnergia(d);
+}
+
+function renderKpisEnergia(d){
+  var box=document.getElementById("enerKpis"); if(!box) return;
+  var consumo=0, fv=0, valor=0;
+  d.forEach(function(e){ consumo+=e.consumo_kwh; fv+=e.generacion_fv_kwh; valor+=e.valor_factura; });
+  var pctFV = (consumo+fv) ? (fv/(consumo+fv)*100) : 0;
+  var costoProm = consumo ? (valor/consumo) : 0;
+  var sedesPresentes = uniq(d.map(function(e){return e.sede}).filter(Boolean));
+  var m2tot = sedesPresentes.reduce(function(a,s){return a+(M2[s]||0);},0);
+  var kwhm2 = m2tot ? (consumo/m2tot) : 0;
+
+  var kpis=[
+    {ico:"⚡",val:fmtNumEner(consumo)+" kWh",lbl:"Consumo adquirido",sub:d.length+" registro(s)",cls:"blue"},
+    {ico:"☀️",val:fmtNumEner(fv)+" kWh",lbl:"Generación FV",sub:"Autoconsumo solar",cls:"warn"},
+    {ico:"🌱",val:pctFV.toFixed(1)+" %",lbl:"Cobertura FV",sub:"Del consumo total",cls:"green"},
+    {ico:"💰",val:fmtCOP(valor),lbl:"Costo total factura",sub:sedesPresentes.join(", ")||"—",cls:"pink"},
+    {ico:"📉",val:"$ "+fmtNumEner(costoProm,1),lbl:"Costo prom. / kWh",sub:"Ponderado",cls:"purple"},
+    {ico:"📐",val:fmtNumEner(kwhm2,2),lbl:"kWh/m²",sub:"Consumo / área",cls:"cyan"}
+  ];
+  box.innerHTML="";
+  kpis.forEach(function(k){
+    box.innerHTML += '<div class="kpi '+k.cls+'"><div class="kpi-ico">'+k.ico+'</div><div class="kpi-val">'+k.val+'</div><div class="kpi-lbl">'+k.lbl+'</div><div class="kpi-sub">'+k.sub+'</div></div>';
+  });
+}
+
+function renderChartsEnergia(d){
+  chEnerSede(d); chEnerM2(d); chEnerTend(d); chEnerFV(d); chEnerCosto(d); chEnerPctFV(d);
+}
+
+function chEnerSede(d){
+  var m={}; d.forEach(function(e){ m[e.sede]=(m[e.sede]||0)+e.consumo_kwh; });
+  var s=Object.keys(m);
+  mkChart("chEnerSede","bar",s,[{data:s.map(function(k){return Math.round(m[k]);}),backgroundColor:CL,borderRadius:6}],{plugins:{legend:{display:false}}});
+}
+
+function chEnerM2(d){
+  var sedes=["OLAS","MANANTIALES"];
+  var vals=sedes.map(function(s){
+    var rs=d.filter(function(e){return e.sede===s});
+    var consumo=rs.reduce(function(a,e){return a+e.consumo_kwh;},0);
+    return M2[s] ? +(consumo/M2[s]).toFixed(2) : 0;
+  });
+  mkChart("chEnerM2","bar",sedes,[{data:vals,backgroundColor:[CL[5],CL[2]],borderRadius:6}],{plugins:{legend:{display:false}}});
+}
+
+function chEnerTend(d){
+  var m={}; d.forEach(function(e){ var p=periodoE(e); m[p]=(m[p]||0)+e.consumo_kwh; });
+  var l=Object.keys(m).sort();
+  mkChart("chEnerTend","line",l,[{label:"kWh",data:l.map(function(k){return Math.round(m[k]);}),borderColor:CL[0],backgroundColor:"rgba(37,99,235,0.15)",fill:true,tension:0.4,pointRadius:3,pointBackgroundColor:CL[0]}]);
+}
+
+function chEnerFV(d){
+  var m={}; d.forEach(function(e){ var p=periodoE(e); if(!m[p])m[p]={a:0,f:0}; m[p].a+=e.consumo_kwh; m[p].f+=e.generacion_fv_kwh; });
+  var l=Object.keys(m).sort();
+  mkChart("chEnerFV","bar",l,[
+    {label:"Adquirida",data:l.map(function(k){return Math.round(m[k].a);}),backgroundColor:CL[0],borderRadius:4},
+    {label:"Fotovoltaica",data:l.map(function(k){return Math.round(m[k].f);}),backgroundColor:CL[2],borderRadius:4}
+  ],{scales:{x:{stacked:true},y:{stacked:true}}});
+}
+
+function chEnerCosto(d){
+  var m={}; d.forEach(function(e){ m[periodoE(e)]=costoKwhE(e); });
+  var l=Object.keys(m).sort();
+  mkChart("chEnerCosto","line",l,[{label:"$/kWh",data:l.map(function(k){return +m[k].toFixed(1);}),borderColor:CL[4],backgroundColor:"rgba(236,72,153,0.15)",fill:true,tension:0.4,pointRadius:3,pointBackgroundColor:CL[4]}]);
+}
+
+function chEnerPctFV(d){
+  var m={}; d.forEach(function(e){ m[periodoE(e)]=pctFVE(e); });
+  var l=Object.keys(m).sort();
+  mkChart("chEnerPctFV","line",l,[{label:"% FV",data:l.map(function(k){return +m[k].toFixed(1);}),borderColor:CL[1],backgroundColor:"rgba(16,185,129,0.15)",fill:true,tension:0.4,pointRadius:3,pointBackgroundColor:CL[1]}]);
+}
+
+function renderTablaEnergia(d){
+  var tbody=document.getElementById("enerTbody"); if(!tbody) return;
+  tbody.innerHTML="";
+  var empty=document.getElementById("enerEmpty"); if(empty) empty.style.display = d.length ? "none" : "block";
+  d.forEach(function(e){
+    var tr=document.createElement("tr");
+    tr.innerHTML =
+      '<td>'+esc(e.sede)+'</td>'+
+      '<td class="mono">'+periodoE(e)+'</td>'+
+      '<td class="r">'+fmtNumEner(e.consumo_kwh)+'</td>'+
+      '<td class="r">'+fmtNumEner(e.generacion_fv_kwh)+'</td>'+
+      '<td class="r">'+fmtNumEner(kwhM2E(e),2)+'</td>'+
+      '<td class="r">'+pctFVE(e).toFixed(1)+'%</td>'+
+      '<td class="r">'+fmtCOP(e.valor_factura)+'</td>'+
+      '<td class="r">$'+fmtNumEner(costoKwhE(e),1)+'</td>'+
+      '<td style="font-size:0.75rem;color:var(--text-muted)">'+esc(e.observaciones||"—")+'</td>'+
+      '<td style="text-align:center"><div style="display:flex;gap:0.25rem;justify-content:center"><button class="btn bwn" style="padding:4px 8px;font-size:0.75rem;" onclick="editarEnergiaRow(\''+e.id_mov+'\')">✏</button><button class="btn brd" style="padding:4px 8px;font-size:0.75rem;" onclick="eliminarEnergiaRow(\''+e.id_mov+'\')">🗑</button></div></td>';
+    tbody.appendChild(tr);
+  });
+}
+
+function editarEnergiaRow(id_mov){
+  var e = energiaData.find(function(x){return x.id_mov===id_mov;}); if(!e) return;
+  enerEditId = id_mov;
+  document.getElementById("ener_id_mov").value = id_mov;
+  document.getElementById("ener_sede").value = e.sede;
+  document.getElementById("ener_anio").value = e.anio;
+  document.getElementById("ener_mes").value = e.mes;
+  document.getElementById("ener_consumo").value = e.consumo_kwh;
+  document.getElementById("ener_fv").value = e.generacion_fv_kwh;
+  document.getElementById("ener_valor").value = e.valor_factura;
+  document.getElementById("ener_obs").value = e.observaciones||"";
+  document.getElementById("bEnerT").textContent = "💾 Actualizar registro";
+  document.getElementById("btnEnerCancel").style.display = "block";
+  document.getElementById("formEner").scrollIntoView({behavior:"smooth"});
+}
+
+function cancelarEdicionEnergia(){
+  enerEditId = "";
+  document.getElementById("formEner").reset();
+  document.getElementById("ener_id_mov").value = "";
+  document.getElementById("bEnerT").textContent = "💾 Guardar registro";
+  document.getElementById("btnEnerCancel").style.display = "none";
+}
+
+function eliminarEnergiaRow(id_mov){
+  if(!confirm("¿Eliminar este registro de energía de forma permanente?")) return;
+  gsr("eliminarEnergia", id_mov,
+    function(res){
+      if(!res||!res.ok){ toast("❌ "+(res?res.msg:"Error"),"err2"); return; }
+      toast("🗑 Registro eliminado","ok2");
+      cargarEnergia();
+    },
+    function(err){ toast("❌ "+err.message,"err2"); }
+  );
+}
+
+document.getElementById("formEner").addEventListener("submit", function(ev){
+  ev.preventDefault();
+  var payload = {
+    id_mov: enerEditId || "",
+    sede: document.getElementById("ener_sede").value,
+    anio: document.getElementById("ener_anio").value,
+    mes: document.getElementById("ener_mes").value,
+    consumo_kwh: document.getElementById("ener_consumo").value || "0",
+    generacion_fv_kwh: document.getElementById("ener_fv").value || "0",
+    valor_factura: document.getElementById("ener_valor").value || "0",
+    observaciones: document.getElementById("ener_obs").value.trim()
+  };
+  var editando = !!enerEditId;
+  setB("btnEner","spEner","bEnerT",true, editando ? "Actualizando…" : "Guardando…");
+  gsr("guardarEnergia", payload,
+    function(res){
+      if(!res||!res.ok){
+        setB("btnEner","spEner","bEnerT",false, editando ? "💾 Actualizar registro" : "💾 Guardar registro");
+        toast("❌ "+(res?res.msg:"Error"),"err2");
+        return;
+      }
+      toast("✅ "+res.msg,"ok2");
+      cancelarEdicionEnergia();
+      cargarEnergia();
+    },
+    function(err){
+      setB("btnEner","spEner","bEnerT",false, editando ? "💾 Actualizar registro" : "💾 Guardar registro");
+      toast("❌ "+err.message,"err2");
+    }
+  );
+});

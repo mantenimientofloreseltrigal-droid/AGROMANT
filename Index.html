@@ -29,6 +29,7 @@
     <button class="ntab"    id="nt3" onclick="goTab(3)">📁 Registros</button>
     <button class="ntab"    id="nt4" onclick="goTab(4)">📈 Analítica</button>
     <button class="ntab"    id="nt5" onclick="goTab(5)">⚙ Categorías</button>
+    <button class="ntab"    id="nt6" onclick="goTab(6)">⚡ Energía</button>
   </div>
   <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="Cambiar modo claro/oscuro">🌙 <span id="themeLabel">Oscuro</span></button>
   <div class="steps">
@@ -495,6 +496,85 @@
           <button class="btn bbl" onclick="addTipo()">+</button>
         </div>
       </div>
+    </div>
+  </div>
+</div></div>
+
+<div id="s6" class="screen"><div class="pg">
+  <div class="ptit">⚡ Energía — Consumo y Generación FV</div>
+  <div class="psub">Registra facturas mensuales por sede y controla el indicador kWh/m²</div>
+
+  <form id="formEner">
+    <input type="hidden" id="ener_id_mov" value="">
+    <div class="card">
+      <div class="card-head"><span class="card-htit">Registro mensual</span></div>
+      <div class="card-head" style="border:none; padding-top:1.5rem; display:block;">
+        <div class="g2">
+          <div class="fd"><label>Sede</label>
+            <select class="inp" id="ener_sede" required>
+              <option value="">— Selecciona sede —</option>
+              <option value="OLAS">🌿 OLAS</option>
+              <option value="MANANTIALES">🌿 MANANTIALES</option>
+            </select>
+          </div>
+          <div class="fd"><label>Año</label><input class="inp" type="number" id="ener_anio" placeholder="2026" min="2020" max="2100" required></div>
+        </div>
+        <div class="g2" style="margin-top:1rem;">
+          <div class="fd"><label>Mes</label>
+            <select class="inp" id="ener_mes" required>
+              <option value="">— Selecciona mes —</option>
+              <option value="1">Enero</option><option value="2">Febrero</option><option value="3">Marzo</option>
+              <option value="4">Abril</option><option value="5">Mayo</option><option value="6">Junio</option>
+              <option value="7">Julio</option><option value="8">Agosto</option><option value="9">Septiembre</option>
+              <option value="10">Octubre</option><option value="11">Noviembre</option><option value="12">Diciembre</option>
+            </select>
+          </div>
+          <div class="fd"><label>Consumo adquirido (kWh)</label><input class="inp" type="number" id="ener_consumo" placeholder="0" min="0" step="0.01" required></div>
+        </div>
+        <div class="g2" style="margin-top:1rem;">
+          <div class="fd"><label>Generación fotovoltaica (kWh)</label><input class="inp" type="number" id="ener_fv" placeholder="0" min="0" step="0.01" value="0"></div>
+          <div class="fd"><label>Valor total factura ($)</label><input class="inp" type="number" id="ener_valor" placeholder="0" min="0" step="1" required></div>
+        </div>
+        <div class="fd" style="margin-top:1rem;"><label>Observaciones</label><input class="inp" type="text" id="ener_obs" placeholder="Opcional"></div>
+      </div>
+    </div>
+    <button type="submit" class="btnp" id="btnEner">
+      <span class="spin" id="spEner"></span><span id="bEnerT">💾 Guardar registro</span>
+    </button>
+    <button type="button" class="btn bgh" id="btnEnerCancel" style="display:none; margin-top:0.5rem; width:100%;" onclick="cancelarEdicionEnergia()">✕ Cancelar edición</button>
+  </form>
+
+  <div class="kpi-grid" id="enerKpis" style="margin-top:2rem;"></div>
+
+  <div class="charts-grid" style="margin-top:1.5rem;">
+    <div class="chart-card"><div class="chart-title">🏢 Consumo por sede (kWh)</div><div class="chart-wrap tall"><canvas id="chEnerSede"></canvas></div></div>
+    <div class="chart-card"><div class="chart-title">📐 kWh/m² por sede</div><div class="chart-wrap tall"><canvas id="chEnerM2"></canvas></div></div>
+  </div>
+  <div class="charts-grid">
+    <div class="chart-card"><div class="chart-title">📈 Tendencia mensual (kWh adquirido)</div><div class="chart-wrap tall"><canvas id="chEnerTend"></canvas></div></div>
+    <div class="chart-card"><div class="chart-title">☀️ Adquirida vs. fotovoltaica</div><div class="chart-wrap tall"><canvas id="chEnerFV"></canvas></div></div>
+  </div>
+  <div class="charts-grid">
+    <div class="chart-card"><div class="chart-title">💲 Costo por kWh — tendencia</div><div class="chart-wrap tall"><canvas id="chEnerCosto"></canvas></div></div>
+    <div class="chart-card"><div class="chart-title">🌱 % Cobertura fotovoltaica — tendencia</div><div class="chart-wrap tall"><canvas id="chEnerPctFV"></canvas></div></div>
+  </div>
+
+  <div class="card" style="margin-top:1.5rem;">
+    <div class="card-head">
+      <span class="card-htit">Historial de registros</span>
+      <div style="display:flex; gap:0.5rem;">
+        <select class="af-sel" id="enerFiltSede" onchange="renderEnergia()"><option value="">🌐 Sedes</option><option value="OLAS">OLAS</option><option value="MANANTIALES">MANANTIALES</option></select>
+        <select class="af-sel" id="enerFiltAnio" onchange="renderEnergia()"><option value="">Todos los años</option></select>
+        <button class="rl-btn" onclick="cargarEnergia()">↺</button>
+      </div>
+    </div>
+    <div id="enerLoad" class="lst-st" style="display:none"><div class="dots"><span></span><span></span><span></span></div></div>
+    <div class="rtable-wrap">
+      <table>
+        <thead><tr><th>Sede</th><th>Periodo</th><th class="r">Adquirida</th><th class="r">FV</th><th class="r">kWh/m²</th><th class="r">% FV</th><th class="r">Factura</th><th class="r">$/kWh</th><th>Obs.</th><th style="text-align:center">Acciones</th></tr></thead>
+        <tbody id="enerTbody"></tbody>
+      </table>
+      <div class="lst-st" id="enerEmpty" style="display:none">Sin registros de energía todavía</div>
     </div>
   </div>
 </div></div>
