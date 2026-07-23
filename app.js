@@ -132,7 +132,7 @@ SB.getItemsOT = async function (ot_id) {
   var ot = sbCheck(otR);
   if (!ot) return [];
   var r = await sb.from("costos_mantenimiento")
-    .select("*, categorias(nombre), equipos(codigo, descripcion)")
+    .select("*, categorias(nombre), equipos(id, codigo, descripcion)")
     .eq("ot_id", ot.id);
   var rows = sbCheck(r) || [];
   return rows.filter(function (c) { return c.descripcion !== "Registro inicial OT"; })
@@ -142,6 +142,7 @@ SB.getItemsOT = async function (ot_id) {
         descripcion: c.descripcion || "", ubicacion: c.ubicacion || "",
         cantidad: parseFloat(c.cantidad) || 0, precio: parseFloat(c.precio_unitario) || 0,
         total_linea: parseFloat(c.total_linea) || 0,
+        equipo_id: c.equipos ? c.equipos.id : "",
         equipo_cod: c.equipos ? c.equipos.codigo : "", equipo_desc: c.equipos ? c.equipos.descripcion : ""
       };
     });
@@ -163,11 +164,13 @@ SB.saveDetalle = async function (payload) {
     var cant = parseFloat(item.cantidad) || 0;
     var prec = parseFloat(item.precio) || 0;
     var fechaItem = item.fecha_ot || hoy;
-    var eqId = await resolverEquipoId(item.equipo_cod, item.equipo_desc);
+    // Si el ítem ya trae equipo_id (elegido en el buscador), se usa directo.
+    // Si no, se intenta resolver por código/descripción (compatibilidad con carga masiva).
+    var eqId = item.equipo_id ? item.equipo_id : await resolverEquipoId(item.equipo_cod, item.equipo_desc);
     filas.push({
       ot_id: ot.id, fecha: fechaItem, empresa: item.empresa || "",
       categoria_id: catNombreToId[item.categoria] || null, tipo: item.tipo || "", labor: item.labor || "",
-      descripcion: item.descripcion || "", ubicacion: item.ubicacion || "", equipo_id: eqId,
+      descripcion: item.descripcion || "", ubicacion: item.ubicacion || "", equipo_id: eqId || null,
       cantidad: cant, precio_unitario: prec, adjunto: "",
       sede_id: sedeValida(item.sede), centro_costo_id: ccValido(item.centro_costos)
     });
@@ -268,7 +271,7 @@ SB.getEquiposPorSede = async function (sede) {
   var r = await q;
   var rows = sbCheck(r) || [];
   return rows.map(function (e) {
-    return { codigo: e.codigo || "", descripcion: e.descripcion || "", referencia: e.referencia || "", ubicacion: e.ubicacion || "", marca: e.marca || "", sede: e.sede_id || "" };
+    return { id: e.id, codigo: e.codigo || "", descripcion: e.descripcion || "", referencia: e.referencia || "", ubicacion: e.ubicacion || "", marca: e.marca || "", sede: e.sede_id || "", estado: e.estado || "", area: e.area || "", criticidad: e.criticidad || "" };
   });
 };
 
@@ -604,50 +607,47 @@ function goTab(n){
   if(n===6) cargarEnergia();
 }
 
+function onDeSedeChange(preservar){
+  var sede = document.getElementById("de_sede").value;
+  var ccSel = document.getElementById("de_cc");
+  var mantener = preservar !== undefined ? preservar : ccSel.value;
+  if(!sede){ ccSel.innerHTML='<option value="">— Selecciona sede primero —</option>'; ccSel.disabled=true; return; }
+  if(!centrosCostosData.length){
+    ccSel.innerHTML='<option value="">Cargando...</option>'; ccSel.disabled=true;
+    gsr("getCentrosCostos", null, function(data){ centrosCostosData=Array.isArray(data)?data:[]; poblarFiltrosCC(); onDeSedeChange(mantener); }, function(){});
+    return;
+  }
+  var filtrados = centrosCostosData.filter(function(c){ return (c.sede||"").toUpperCase()===sede.toUpperCase(); });
+  var opts='<option value="">— Selecciona CC —</option>', found=false;
+  filtrados.forEach(function(c){
+    var sel = c.id===mantener; if(sel) found=true;
+    opts+='<option value="'+esc(c.id)+'"'+(sel?' selected':'')+'>'+esc(c.id+(c.descripcion?" — "+c.descripcion:""))+'</option>';
+  });
+  if(mantener && !found){ opts+='<option value="'+esc(mantener)+'" selected>'+esc(mantener)+' (no está en la lista de esta sede)</option>'; }
+  ccSel.innerHTML=opts; ccSel.disabled=false;
+}
+
 function onSedeChange(){
   var sede = document.getElementById("sede").value;
-  var clasSel = document.getElementById("clas");
-  var ccSel   = document.getElementById("cc");
+  var ccSel = document.getElementById("cc");
   if(!sede){
-    clasSel.innerHTML='<option value="">— Selecciona sede primero —</option>';
-    clasSel.disabled=true;
     ccSel.innerHTML='<option value="">— Selecciona sede primero —</option>';
     ccSel.disabled=true;
     return;
   }
   if(!centrosCostosData.length){
-    clasSel.innerHTML='<option value="">Cargando...</option>';
-    clasSel.disabled=true;
+    ccSel.innerHTML='<option value="">Cargando...</option>';
+    ccSel.disabled=true;
     gsr("getCentrosCostos", null, function(data){
       centrosCostosData = Array.isArray(data) ? data : [];
       poblarFiltrosCC();
-      onSedeChange(); 
+      onSedeChange();
     }, function(){
-      clasSel.innerHTML='<option value="">— Error —</option>';
+      ccSel.innerHTML='<option value="">— Error —</option>';
     });
     return;
   }
   var filtrados = centrosCostosData.filter(function(c){ return (c.sede||"").toUpperCase() === sede.toUpperCase(); });
-  var clases = [];
-  filtrados.forEach(function(c){ if(c.clasificacion && clases.indexOf(c.clasificacion)<0) clases.push(c.clasificacion); });
-  clases.sort();
-  clasSel.innerHTML='<option value="">— Clasificación CC —</option>';
-  clases.forEach(function(cl){ clasSel.innerHTML+='<option value="'+esc(cl)+'">'+esc(cl)+'</option>'; });
-  clasSel.disabled = clases.length === 0;
-  ccSel.innerHTML='<option value="">— Selecciona clasificación —</option>';
-  ccSel.disabled=true;
-}
-
-function onClasChange(){
-  var sede  = document.getElementById("sede").value;
-  var clas  = document.getElementById("clas").value;
-  var ccSel = document.getElementById("cc");
-  if(!sede || !clas){
-    ccSel.innerHTML='<option value="">— Selecciona clasificación —</option>';
-    ccSel.disabled=true;
-    return;
-  }
-  var filtrados = centrosCostosData.filter(function(c){ return (c.sede||"").toUpperCase() === sede.toUpperCase() && (c.clasificacion||"") === clas; });
   ccSel.innerHTML='<option value="">— Selecciona CC —</option>';
   filtrados.forEach(function(c){
     var lbl = c.id + (c.descripcion ? " — "+c.descripcion : "");
@@ -766,76 +766,83 @@ function cargarUbicaciones(sede, categoria, cb){
   gsr("getUbicacionesPorSede", {sede:sede, categoria:categoria}, function(data){ ubicacionesCache[key] = Array.isArray(data)?data:[]; if(cb)cb(ubicacionesCache[key]); }, function(){ if(cb)cb([]); });
 }
 
-function buildEquipoOpts(categoria, ubicacion, selCod){
-  var esMecanico = categoria && categoria.toLowerCase().indexOf("mec")>=0;
-  if(!esMecanico) return '<option value="">— N/A —</option>';
-  var currentSel = String(selCod || "").trim();
-  if(currentSel.indexOf("||") >= 0) currentSel = currentSel.split("||")[0];
-  var filtrados = equiposCache.filter(function(e){ if(!ubicacion) return true; return String(e.ubicacion||"").toLowerCase().includes(String(ubicacion).toLowerCase()); });
-  var opts = '<option value="">— Selecciona equipo —</option>';
-  var foundSel = false;
-  filtrados.forEach(function(e){
-    var codigo = String(e.codigo || "").trim();
-    var desc = String(e.descripcion || "").trim();
-    var lbl = (codigo ? codigo + " — " : "") + desc + (e.marca ? " (" + e.marca + ")" : "");
-    var isSel = currentSel && codigo === currentSel;
-    if(isSel) foundSel = true;
-    opts += '<option value="'+esc(codigo)+'" data-desc="'+esc(desc)+'"'+(isSel?' selected':'')+'>'+esc(lbl)+'</option>';
-  });
-  if(currentSel && !foundSel){
-    var match = equiposCache.find(function(e){ return String(e.codigo || "").trim() === currentSel; });
-    var desc2 = match ? String(match.descripcion || "").trim() : "";
-    var lbl2 = match ? ((match.codigo ? match.codigo + " — " : "") + match.descripcion + (match.marca ? " (" + match.marca + ")" : "")) : currentSel;
-    opts += '<option value="'+esc(currentSel)+'" data-desc="'+esc(desc2)+'" selected>'+esc(lbl2 || currentSel)+'</option>';
-  }
-  if(!filtrados.length && !currentSel) opts+='<option value="" disabled>Sin equipos</option>';
-  return opts;
-}
+function buildEquipoOpts(){ return ""; } // obsoleto, se conserva vacío por compatibilidad
 
 function bCO(s){var o='<option value="">— Cat —</option>';Object.keys(catalogo).forEach(function(c){o+='<option value="'+esc(c)+'"'+(s===c?" selected":"")+">"+esc(c)+"</option>"});return o}
-function bTO(cat,s){var o='<option value="">— Tipo —</option>';if(cat&&catalogo[cat])catalogo[cat].forEach(function(t){o+='<option value="'+esc(t)+'"'+(s===t?" selected":"")+">"+esc(t)+"</option>"});return o}
+function bTO(cat,s){var o='<option value="">— Tipo —</option>';var found=false;if(cat&&catalogo[cat])catalogo[cat].forEach(function(t){if(s===t)found=true;o+='<option value="'+esc(t)+'"'+(s===t?" selected":"")+">"+esc(t)+"</option>"});if(s&&!found){o+='<option value="'+esc(s)+'" selected>'+esc(s)+' (no está en el catálogo)</option>'}return o}
 function bLO(s){return labores.map(function(l){return'<option value="'+l+'"'+(s===l?" selected":"")+">"+l+"</option>"}).join("")}
 
+function eqBuscar(inp){
+  var q = inp.value.trim().toLowerCase();
+  var drop = inp.nextElementSibling;
+  var sede = (currentEditOT && currentEditOT.sede) || (OT && OT.sede) || "";
+  var lista = equiposCache.filter(function(e){
+    if(sede && e.sede !== sede) return false;
+    if(!q) return true;
+    return (e.codigo||"").toLowerCase().indexOf(q) >= 0 || (e.descripcion||"").toLowerCase().indexOf(q) >= 0;
+  }).slice(0, 15);
+  if(!lista.length){
+    drop.innerHTML = '<div class="eq-drop-item eq-empty">'+(q ? "Sin resultados" : (equiposCache.length ? "Escribe para buscar…" : "No hay equipos cargados para esta sede"))+'</div>';
+    drop.style.display = "block"; return;
+  }
+  drop.innerHTML = lista.map(function(e){
+    var inactivo = e.estado && e.estado.toLowerCase().indexOf("baja") >= 0;
+    return '<div class="eq-drop-item'+(inactivo?' eq-inactivo':'')+'" data-id="'+esc(e.id)+'" data-cod="'+esc(e.codigo)+'" data-desc="'+esc(e.descripcion)+'" onmousedown="eqElegir(this)">'+
+      '<b>'+esc(e.codigo)+'</b> — '+esc(e.descripcion)+(e.ubicacion?' <span style="color:var(--text-muted)">('+esc(e.ubicacion)+')</span>':'')+(inactivo?' <span class="eq-tag">de baja</span>':'')+
+      '</div>';
+  }).join("");
+  drop.style.display = "block";
+}
+function eqElegir(el){
+  var drop = el.parentElement, inp = drop.previousElementSibling;
+  inp.value = el.getAttribute("data-cod") + " — " + el.getAttribute("data-desc");
+  inp.setAttribute("data-eqid", el.getAttribute("data-id"));
+  drop.style.display = "none";
+}
+function eqCerrar(inp){ setTimeout(function(){ var drop = inp.nextElementSibling; if(drop) drop.style.display = "none"; }, 150); }
+function eqLimpiarInput(inp){ inp.value = ""; inp.setAttribute("data-eqid",""); inp.focus(); }
+function equipoSearchHTML(item){
+  var label = (item.equipo_id && (item.equipo_cod || item.equipo_desc)) ? ((item.equipo_cod?item.equipo_cod+" — ":"")+(item.equipo_desc||"")) : "";
+  return '<div class="eq-wrap">'+
+    '<input class="ci eq-search" type="text" placeholder="Buscar equipo (opcional)…" autocomplete="off" '+
+      'value="'+esc(label)+'" data-eqid="'+esc(item.equipo_id||"")+'" '+
+      'oninput="eqBuscar(this)" onfocus="eqBuscar(this)" onblur="eqCerrar(this)">'+
+    '<div class="eq-drop"></div></div>';
+}
 function getEquipoSelData(tr){
-  var sel = tr.querySelector(".eq-sel");
-  var codigo = sel ? String(sel.value || "").trim() : "";
-  if(codigo.indexOf("||") >= 0) codigo = codigo.split("||")[0];
-  var opt = sel && sel.selectedOptions && sel.selectedOptions[0] ? sel.selectedOptions[0] : null;
-  var descripcion = opt ? String(opt.getAttribute("data-desc") || "").trim() : "";
-  if(!descripcion && opt){
-    var txt = String(opt.textContent || "").trim();
-    descripcion = txt.indexOf("—") >= 0 ? txt.split("—").slice(1).join("—").trim() : txt;
-  }
-  if(!descripcion && codigo){
-    var found = equiposCache.find(function(e){ return String(e.codigo || "").trim() === codigo; });
-    if(found) descripcion = String(found.descripcion || "").trim();
-  }
-  return { codigo: codigo, descripcion: descripcion };
+  var inp = tr.querySelector(".eq-search");
+  if(!inp) return { equipo_id:"", codigo:"", descripcion:"" };
+  var val = String(inp.value||"").trim();
+  var cod = "", desc = "";
+  if(val.indexOf(" — ") >= 0){ var parts = val.split(" — "); cod = parts[0].trim(); desc = parts.slice(1).join(" — ").trim(); }
+  return { equipo_id: inp.getAttribute("data-eqid") || "", codigo: cod, descripcion: desc };
 }
 
 function addFila(item,tbody){
   item=item||{};tbody=tbody||document.getElementById("tbody");
-  var tr=document.createElement("tr");
-  var eqOpts=buildEquipoOpts(item.categoria, item.ubicacion, item.equipo_cod||"");
+  var n=tbody.children.length+1;
+  var tr=document.createElement("div"); tr.className="item-card";
   var ubicHtml='<input class="ci ubic-in" value="'+esc(item.ubicacion||"")+'" placeholder="Ubicación" onchange="onUbicChange(this)">';
   tr.innerHTML=
-    '<td><select class="ci csel" onchange="onCC(this,false)" title="'+esc(item.categoria||"")+'">'+bCO(item.categoria)+'</select></td>'+
-    '<td><select class="ci tsel" title="'+esc(item.tipo||"")+'">'+bTO(item.categoria,item.tipo)+'</select></td>'+
-    '<td><select class="ci">'+bLO(item.labor)+'</select></td>'+
-    '<td><input class="ci" value="'+esc(item.descripcion||"")+'" placeholder="Descripción"></td>'+
-    '<td class="ubic-td">'+ubicHtml+'</td>'+
-    '<td><select class="ci eq-sel" onchange="onEquipoChange(this)">'+eqOpts+'</select></td>'+
-    '<td><input class="ci mn" data-rol="cant" value="'+(item.cantidad||"")+'" type="number" min="0" step="0.01" oninput="calcT()"></td>'+
-    '<td><input class="ci mn" data-rol="prec" value="'+(item.precio||"")+'" type="number" min="0" step="0.01" oninput="calcT()"></td>'+
-    '<td><div class="tl" data-tl style="font-family:var(--font-mono);font-size:0.875rem;text-align:right;">$ 0.00</div></td>'+
-    '<td style="text-align:center"><button class="btn brd" style="padding:4px;" onclick="delF(this)">✕</button></td>';
+    '<div class="item-card-head"><span class="item-card-num">Ítem #'+n+'</span><button class="btn brd" style="padding:4px 10px;font-size:0.75rem;" onclick="delF(this)">✕ Quitar</button></div>'+
+    '<div class="item-card-grid">'+
+      '<div class="fd"><label>Categoría</label><select class="ci csel" onchange="onCC(this,false)">'+bCO(item.categoria)+'</select></div>'+
+      '<div class="fd"><label>Tipo</label><select class="ci tsel">'+bTO(item.categoria,item.tipo)+'</select></div>'+
+      '<div class="fd"><label>Labor</label><select class="ci">'+bLO(item.labor)+'</select></div>'+
+      '<div class="fd"><label>Ubicación</label><div class="ubic-td">'+ubicHtml+'</div></div>'+
+      '<div class="fd full"><label>Descripción</label><input class="ci" data-rol="desc" value="'+esc(item.descripcion||"")+'" placeholder="Descripción del trabajo"></div>'+
+      '<div class="fd full"><label>Equipo (opcional)</label>'+equipoSearchHTML(item)+'</div>'+
+      '<div class="fd"><label>Cantidad</label><input class="ci mn" data-rol="cant" value="'+(item.cantidad||"")+'" type="number" min="0" step="0.01" oninput="calcT()"></div>'+
+      '<div class="fd"><label>Precio unitario</label><input class="ci mn" data-rol="prec" value="'+(item.precio||"")+'" type="number" min="0" step="0.01" oninput="calcT()"></div>'+
+    '</div>'+
+    '<div class="item-card-total">Total línea: <span data-tl>$ 0.00</span></div>';
   tbody.appendChild(tr);updEmpty();updCnt();calcT();
   if(item.categoria && (item.categoria.toLowerCase().indexOf("invernadero")>=0 || item.categoria.toLowerCase().indexOf("mec")>=0)){
-    actualizarUbicCell(tr, item.categoria, item.ubicacion||"", false);
+    actualizarUbicCell(tr, item.categoria||"", item.ubicacion||"", false);
   }
 }
 function onCC(sel,dp){
-  var tr=sel.closest("tr"), cat=sel.value;
+  var tr=sel.closest(".item-card"), cat=sel.value;
   tr.querySelector(".tsel").innerHTML=bTO(cat,"");
   actualizarUbicCell(tr, cat, "", dp);
   if(dp)dpCalcT();else calcT();
@@ -843,48 +850,36 @@ function onCC(sel,dp){
 function actualizarUbicCell(tr, cat, selVal, dp){
   var sede = (currentEditOT&&currentEditOT.sede)||(OT&&OT.sede)||"";
   var td = tr.querySelector(".ubic-td"); if(!td) return;
-  var eqSel = tr.querySelector(".eq-sel");
-  var currentEq = eqSel ? String(eqSel.value || "").trim() : "";
   var esInv = cat && cat.toLowerCase().indexOf("invernadero") >= 0;
   var esMec = cat && cat.toLowerCase().indexOf("mec") >= 0;
 
   function renderUbic(lista, placeholder){
     if(lista && lista.length){
       var opts='<option value="">'+esc(placeholder)+'</option>';
-      lista.forEach(function(u){ opts+='<option value="'+esc(u)+'"'+(u===selVal?' selected':'')+'>'+esc(u)+'</option>'; });
+      var found=false;
+      lista.forEach(function(u){ if(u===selVal)found=true; opts+='<option value="'+esc(u)+'"'+(u===selVal?' selected':'')+'>'+esc(u)+'</option>'; });
+      if(selVal && !found){ opts += '<option value="'+esc(selVal)+'" selected>'+esc(selVal)+' (no registrada)</option>'; }
       td.innerHTML='<select class="ci ubic-sel" onchange="onUbicChange(this)">'+opts+'</select>';
     } else {
       td.innerHTML='<input class="ci ubic-in" value="'+esc(selVal)+'" placeholder="Ubicación" onchange="onUbicChange(this)">';
     }
-    if(eqSel) eqSel.innerHTML=buildEquipoOpts(cat, selVal, currentEq);
     if(dp) dpCalcT(); else calcT();
   }
-  if(esInv){ cargarUbicaciones(sede, cat, function(lista){ renderUbic(lista, "— Bloque —"); }); } 
-  else if(esMec){ cargarUbicMecanicos(sede, function(lista){ renderUbic(lista, "— Ubicación —"); }); } 
+  if(esInv){ cargarUbicaciones(sede, cat, function(lista){ renderUbic(lista, "— Bloque —"); }); }
+  else if(esMec){ cargarUbicMecanicos(sede, function(lista){ renderUbic(lista, "— Ubicación —"); }); }
   else {
     td.innerHTML='<input class="ci ubic-in" value="'+esc(selVal)+'" placeholder="Ubicación" onchange="onUbicChange(this)">';
-    if(eqSel) eqSel.innerHTML=buildEquipoOpts(cat, selVal, currentEq);
     if(dp) dpCalcT(); else calcT();
   }
 }
-function onUbicChange(inp){
-  var tr=inp.closest("tr"), catSel=tr.querySelector(".csel"), eqSel=tr.querySelector(".eq-sel");
-  var currentEq = eqSel ? String(eqSel.value || "").trim() : "";
-  if(eqSel&&catSel) eqSel.innerHTML=buildEquipoOpts(catSel.value, inp.value, currentEq);
-}
-function onEquipoChange(sel){
-  var tr = sel.closest("tr"); if(!tr) return;
-  var opt = sel.selectedOptions && sel.selectedOptions[0] ? sel.selectedOptions[0] : null;
-  var desc = opt ? String(opt.getAttribute("data-desc") || "").trim() : "";
-  sel.setAttribute("data-desc", desc);
-}
+function onUbicChange(){ /* la búsqueda de equipo ya no depende de la ubicación seleccionada */ }
 function getUbicVal(tr){ var s=tr.querySelector(".ubic-sel"); if(s) return s.value; var i=tr.querySelector(".ubic-in"); return i?i.value:""; }
-function delF(btn){btn.closest("tr").remove();updEmpty();updCnt();calcT()}
+function delF(btn){btn.closest(".item-card").remove();updEmpty();updCnt();calcT()}
 function clearT(){if(!confirm("¿Limpiar todo?"))return;document.getElementById("tbody").innerHTML="";updEmpty();updCnt();calcT()}
-function updEmpty(){document.getElementById("tempty").style.display=document.getElementById("tbody").rows.length===0?"block":"none"}
-function updCnt(){document.getElementById("nit").textContent=document.getElementById("tbody").rows.length}
+function updEmpty(){document.getElementById("tempty").style.display=document.getElementById("tbody").children.length===0?"block":"none"}
+function updCnt(){document.getElementById("nit").textContent=document.getElementById("tbody").children.length}
 function calcT(){
-  var rows=document.querySelectorAll("#tbody tr"),sub=0;
+  var rows=document.querySelectorAll("#tbody .item-card"),sub=0;
   var fmt2=function(n){return"$ "+n.toLocaleString("es-CO",{minimumFractionDigits:2,maximumFractionDigits:2})};
   rows.forEach(function(r){
     var cant=r.querySelector("[data-rol='cant']"), prec=r.querySelector("[data-rol='prec']");
@@ -897,13 +892,13 @@ function calcT(){
 }
 
 function guardarDet(){
-  var rows=document.querySelectorAll("#tbody tr");
+  var rows=document.querySelectorAll("#tbody .item-card");
   if(!rows.length){toast("⚠️ Agrega al menos un ítem","err2");return}
   var items=[];
   rows.forEach(function(r){
-    var ins=r.querySelectorAll("input"), catS2=r.querySelector(".csel"), tipS2=r.querySelector(".tsel"), labS2=r.querySelectorAll("select")[2];
+    var descI=r.querySelector("[data-rol='desc']"), catS2=r.querySelector(".csel"), tipS2=r.querySelector(".tsel"), labS2=r.querySelectorAll("select")[2];
     var eqData=getEquipoSelData(r);
-    items.push({ot_id:OT.ot_id, categoria:catS2?catS2.value:"", tipo:tipS2?tipS2.value:"", labor:labS2?labS2.value:"", descripcion:ins[0]?ins[0].value.trim():"", ubicacion:getUbicVal(r).trim(), cantidad:(r.querySelector("[data-rol='cant']")||{value:"0"}).value||"0", precio:(r.querySelector("[data-rol='prec']")||{value:"0"}).value||"0", equipo_cod:eqData.codigo, equipo_desc:eqData.descripcion, sede:OT.sede||"", empresa:OT.empresa||"", centro_costos:OT.centro_costos||"", fecha_ot:OT.fecha||""});
+    items.push({ot_id:OT.ot_id, categoria:catS2?catS2.value:"", tipo:tipS2?tipS2.value:"", labor:labS2?labS2.value:"", descripcion:descI?descI.value.trim():"", ubicacion:getUbicVal(r).trim(), cantidad:(r.querySelector("[data-rol='cant']")||{value:"0"}).value||"0", precio:(r.querySelector("[data-rol='prec']")||{value:"0"}).value||"0", equipo_id:eqData.equipo_id, equipo_cod:eqData.codigo, equipo_desc:eqData.descripcion, sede:OT.sede||"", empresa:OT.empresa||"", centro_costos:OT.centro_costos||"", fecha_ot:OT.fecha||""});
   });
   setB("bSD","sp2","bDt",true,"Guardando…");
   gsr("saveDetalle",{items:items,ot_id:OT.ot_id},
@@ -916,8 +911,7 @@ function volverOT(){
   document.getElementById("st1").classList.add("on");document.getElementById("st1").classList.remove("done");document.getElementById("st2").classList.remove("on");
   document.getElementById("formOT").reset();document.getElementById("dn1").style.display="none";document.getElementById("dn2").style.display="none";
   document.getElementById("actasList").innerHTML="";document.getElementById("fecha").value=new Date().toISOString().split("T")[0];
-  document.getElementById("clas").innerHTML='<option value="">— Selecciona sede primero —</option>'; document.getElementById("clas").disabled=true;
-  document.getElementById("cc").innerHTML='<option value="">— Selecciona clasificación —</option>'; document.getElementById("cc").disabled=true;
+  document.getElementById("cc").innerHTML='<option value="">— Selecciona sede primero —</option>'; document.getElementById("cc").disabled=true;
   document.getElementById("tbody").innerHTML="";document.getElementById("igrid").innerHTML="";
   pdfB64="";OT={};actasFiles=[];updEmpty();updCnt();calcT();goTab(1);
 }
@@ -1037,7 +1031,8 @@ function abrirDetalle(ot_id){
   document.getElementById("de_otid").value=ot.ot_id||"";document.getElementById("de_fecha").value=ot.fecha||"";
   document.getElementById("de_emp").value=ot.empresa||"";
   var deSede=document.getElementById("de_sede"); deSede.value=ot.sede||"";
-  document.getElementById("de_clas").value=ot.clasificacion||"";document.getElementById("de_cc").value=ot.centro_costos||"";
+  document.getElementById("de_clas").value=ot.clasificacion||"";
+  onDeSedeChange(ot.centro_costos||"");
   document.getElementById("de_ptot").value=ot.precio_total||"";document.getElementById("de_est").value=ot.estado||"PENDIENTE";
   document.getElementById("de_obs").value=ot.observaciones||"";
   var lnk=document.getElementById("de_link");lnk.href=ot.archivo_pdf||"#";lnk.textContent=ot.archivo_pdf?"Abrir documento PDF":"No hay archivo adjunto";
@@ -1070,26 +1065,29 @@ function cargarCotDP(){
 }
 
 function dpAddFila(item){
-  item=item||{}; var tbody=document.getElementById("dpTbody"), tr=document.createElement("tr");
-  var eqOpts=buildEquipoOpts(item.categoria||"", item.ubicacion||"", item.equipo_cod||"");
+  item=item||{}; var tbody=document.getElementById("dpTbody");
+  var n=tbody.children.length+1;
+  var tr=document.createElement("div"); tr.className="item-card";
   var ubicHtmlDp='<input class="dp-fi ubic-in" value="'+esc(item.ubicacion||"")+'" onchange="onUbicChange(this)">';
   tr.innerHTML=
-    '<td><select class="dp-fi csel" onchange="onCC(this,true)">'+bCO(item.categoria)+'</select></td>'+
-    '<td><select class="dp-fi tsel">'+bTO(item.categoria,item.tipo)+'</select></td>'+
-    '<td><select class="dp-fi">'+bLO(item.labor)+'</select></td>'+
-    '<td><input class="dp-fi" value="'+esc(item.descripcion||"")+'"></td>'+
-    '<td class="ubic-td">'+ubicHtmlDp+'</td>'+
-    '<td><select class="dp-fi eq-sel" onchange="onEquipoChange(this)">'+eqOpts+'</select></td>'+
-    '<td><input class="dp-fi mn" data-rol="cant" value="'+(item.cantidad||"")+'" type="number" step="0.01" oninput="dpCalcT()"></td>'+
-    '<td><input class="dp-fi mn" data-rol="prec" value="'+(item.precio||"")+'" type="number" step="0.01" oninput="dpCalcT()"></td>'+
-    '<td><div class="tl" data-tl style="font-family:var(--font-mono);font-size:0.875rem;text-align:right;">$ 0.00</div></td>'+
-    '<td style="text-align:center"><button class="btn brd" style="padding:4px;" onclick="dpDelF(this)">✕</button></td>';
+    '<div class="item-card-head"><span class="item-card-num">Ítem #'+n+'</span><button class="btn brd" style="padding:4px 10px;font-size:0.75rem;" onclick="dpDelF(this)">✕ Quitar</button></div>'+
+    '<div class="item-card-grid">'+
+      '<div class="fd"><label>Categoría</label><select class="dp-fi csel" onchange="onCC(this,true)">'+bCO(item.categoria)+'</select></div>'+
+      '<div class="fd"><label>Tipo</label><select class="dp-fi tsel">'+bTO(item.categoria,item.tipo)+'</select></div>'+
+      '<div class="fd"><label>Labor</label><select class="dp-fi">'+bLO(item.labor)+'</select></div>'+
+      '<div class="fd"><label>Ubicación</label><div class="ubic-td">'+ubicHtmlDp+'</div></div>'+
+      '<div class="fd full"><label>Descripción</label><input class="dp-fi" data-rol="desc" value="'+esc(item.descripcion||"")+'"></div>'+
+      '<div class="fd full"><label>Equipo (opcional)</label>'+equipoSearchHTML(item)+'</div>'+
+      '<div class="fd"><label>Cantidad</label><input class="dp-fi mn" data-rol="cant" value="'+(item.cantidad||"")+'" type="number" step="0.01" oninput="dpCalcT()"></div>'+
+      '<div class="fd"><label>Precio unitario</label><input class="dp-fi mn" data-rol="prec" value="'+(item.precio||"")+'" type="number" step="0.01" oninput="dpCalcT()"></div>'+
+    '</div>'+
+    '<div class="item-card-total">Total línea: <span data-tl>$ 0.00</span></div>';
   tbody.appendChild(tr);dpCalcT();
-  if(item.categoria && (item.categoria.toLowerCase().indexOf("invernadero")>=0 || item.categoria.toLowerCase().indexOf("mec")>=0)){ actualizarUbicCell(tr, item.categoria, item.ubicacion||"", true); }
+  if(item.categoria && (item.categoria.toLowerCase().indexOf("invernadero")>=0 || item.categoria.toLowerCase().indexOf("mec")>=0)){ actualizarUbicCell(tr, item.categoria||"", item.ubicacion||"", true); }
 }
-function dpDelF(btn){btn.closest("tr").remove();dpCalcT()}
+function dpDelF(btn){btn.closest(".item-card").remove();dpCalcT()}
 function dpCalcT(){
-  var rows=document.querySelectorAll("#dpTbody tr"),sub=0;
+  var rows=document.querySelectorAll("#dpTbody .item-card"),sub=0;
   var fmt2=function(n){return"$ "+n.toLocaleString("es-CO",{minimumFractionDigits:2,maximumFractionDigits:2})};
   rows.forEach(function(r){
     var cant=r.querySelector("[data-rol='cant']"), prec=r.querySelector("[data-rol='prec']");
@@ -1103,11 +1101,11 @@ function guardarEdicion(){
   if(!currentEditOT)return;
   var ot_id=document.getElementById("de_otid").value.trim();
   var datos={ot_id_original:currentEditOT.ot_id,ot_id:ot_id,fecha:document.getElementById("de_fecha").value,empresa:document.getElementById("de_emp").value.trim(),sede:document.getElementById("de_sede").value.trim(),clasificacion:document.getElementById("de_clas").value.trim(),precio_total:document.getElementById("de_ptot").value||"0",centro_costos:document.getElementById("de_cc").value.trim(),estado:document.getElementById("de_est").value,observaciones:document.getElementById("de_obs").value.trim()};
-  var dpRows=document.querySelectorAll("#dpTbody tr"),items=[];
+  var dpRows=document.querySelectorAll("#dpTbody .item-card"),items=[];
   dpRows.forEach(function(r){
-    var ins=r.querySelectorAll("input"), catS=r.querySelector(".csel"), tipS=r.querySelector(".tsel"), labS=r.querySelectorAll("select")[2];
+    var descI=r.querySelector("[data-rol='desc']"), catS=r.querySelector(".csel"), tipS=r.querySelector(".tsel"), labS=r.querySelectorAll("select")[2];
     var eqData=getEquipoSelData(r);
-    items.push({ot_id:ot_id, categoria:catS?catS.value:"", tipo:tipS?tipS.value:"", labor:labS?labS.value:"", descripcion:ins[0]?ins[0].value.trim():"", ubicacion:getUbicVal(r).trim(), cantidad:(r.querySelector("[data-rol='cant']")||{value:"0"}).value||"0", precio:(r.querySelector("[data-rol='prec']")||{value:"0"}).value||"0", equipo_cod:eqData.codigo, equipo_desc:eqData.descripcion, sede:currentEditOT?currentEditOT.sede:"", centro_costos:currentEditOT?currentEditOT.centro_costos:"", empresa:currentEditOT?currentEditOT.empresa:"", fecha_ot:currentEditOT?currentEditOT.fecha:""})
+    items.push({ot_id:ot_id, categoria:catS?catS.value:"", tipo:tipS?tipS.value:"", labor:labS?labS.value:"", descripcion:descI?descI.value.trim():"", ubicacion:getUbicVal(r).trim(), cantidad:(r.querySelector("[data-rol='cant']")||{value:"0"}).value||"0", precio:(r.querySelector("[data-rol='prec']")||{value:"0"}).value||"0", equipo_id:eqData.equipo_id, equipo_cod:eqData.codigo, equipo_desc:eqData.descripcion, sede:currentEditOT?currentEditOT.sede:"", centro_costos:currentEditOT?currentEditOT.centro_costos:"", empresa:currentEditOT?currentEditOT.empresa:"", fecha_ot:currentEditOT?currentEditOT.fecha:""})
   });
   setB("btnSE","sp3","bSEt",true,"Guardando…");
   gsr("saveEditarOT",datos,

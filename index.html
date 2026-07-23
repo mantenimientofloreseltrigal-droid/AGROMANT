@@ -74,9 +74,15 @@
               <option value="MANANTIALES">🌿 MANANTIALES</option>
             </select>
           </div>
-          <div class="fd"><label>Clasificación CC</label>
-            <select class="inp" id="clas" onchange="onClasChange()" disabled>
-              <option value="">— Selecciona sede primero —</option>
+          <div class="fd"><label>Clasificación</label>
+            <select class="inp" id="clas">
+              <option value="">— Selecciona clasificación —</option>
+              <option value="Mantenimiento de equipos">🔧 Mantenimiento de equipos</option>
+              <option value="Producción">🏭 Producción</option>
+              <option value="Invernaderos">🌿 Invernaderos</option>
+              <option value="Zonas verdes">🌳 Zonas verdes</option>
+              <option value="Obras civiles">🧱 Obras civiles</option>
+              <option value="Fabricaciones nuevas">🛠 Fabricaciones nuevas</option>
             </select>
           </div>
         </div>
@@ -84,7 +90,7 @@
           <div class="fd"><label>Precio Total Estimado</label><input class="inp" type="number" id="ptot" placeholder="0.00" min="0" step="0.01"></div>
           <div class="fd"><label>Centro de Costos</label>
             <select class="inp" id="cc" disabled>
-              <option value="">— Selecciona clasificación —</option>
+              <option value="">— Selecciona sede primero —</option>
             </select>
           </div>
         </div>
@@ -149,23 +155,7 @@
     </div>
     <div id="tld" class="lst-st" style="display:none"><div class="dots"><span></span><span></span><span></span></div></div>
     <div id="twrap">
-      <div class="rtable-wrap">
-        <table>
-          <thead><tr>
-            <th style="width:120px">Categoría</th>
-            <th style="width:120px">Tipo</th>
-            <th style="width:100px">Labor</th>
-            <th style="min-width:160px">Descripción</th>
-            <th style="width:110px">Ubicación</th>
-            <th style="width:150px">Equipo</th>
-            <th class="r" style="width:70px">Cant.</th>
-            <th class="r" style="width:100px">P.Unit.</th>
-            <th class="r" style="width:100px">Total</th>
-            <th style="width:40px;text-align:center">—</th>
-          </tr></thead>
-          <tbody id="tbody"></tbody>
-        </table>
-      </div>
+      <div id="tbody" class="items-wrap"></div>
       <div class="lst-st" id="tempty">La cotización está vacía. Agrega un ítem.</div>
     </div>
     <div class="tfoot">
@@ -643,10 +633,22 @@
           <div class="dp-f"><div class="dp-fl">Fecha</div><input class="dp-fi" id="de_fecha" type="date"></div>
           <div class="dp-f"><div class="dp-fl">Empresa</div><input class="dp-fi" id="de_emp" type="text"></div>
           <div class="dp-f"><div class="dp-fl">Sede</div>
-            <select class="dp-fi" id="de_sede"><option value="">— Sede —</option><option value="OLAS">OLAS</option><option value="MANANTIALES">MANANTIALES</option></select>
+            <select class="dp-fi" id="de_sede" onchange="onDeSedeChange()"><option value="">— Sede —</option><option value="OLAS">OLAS</option><option value="MANANTIALES">MANANTIALES</option></select>
           </div>
-          <div class="dp-f"><div class="dp-fl">Clasificación</div><input class="dp-fi" id="de_clas" type="text"></div>
-          <div class="dp-f"><div class="dp-fl">Centro Costos</div><input class="dp-fi" id="de_cc" type="text"></div>
+          <div class="dp-f"><div class="dp-fl">Clasificación</div>
+            <select class="dp-fi" id="de_clas">
+              <option value="">— Selecciona clasificación —</option>
+              <option value="Mantenimiento de equipos">🔧 Mantenimiento de equipos</option>
+              <option value="Producción">🏭 Producción</option>
+              <option value="Invernaderos">🌿 Invernaderos</option>
+              <option value="Zonas verdes">🌳 Zonas verdes</option>
+              <option value="Obras civiles">🧱 Obras civiles</option>
+              <option value="Fabricaciones nuevas">🛠 Fabricaciones nuevas</option>
+            </select>
+          </div>
+          <div class="dp-f"><div class="dp-fl">Centro Costos</div>
+            <select class="dp-fi" id="de_cc"><option value="">— Selecciona sede primero —</option></select>
+          </div>
           <div class="dp-f"><div class="dp-fl">Precio Total</div><input class="dp-fi" id="de_ptot" type="number"></div>
           <div class="dp-f"><div class="dp-fl">Estado</div><select class="dp-fi" id="de_est"><option>PENDIENTE</option><option>EN PROCESO</option><option>CERRADO</option></select></div>
         </div>
@@ -657,12 +659,7 @@
         <div id="dp2ld" class="lst-st" style="display:none"><div class="dots"><span></span><span></span><span></span></div></div>
         <div id="dp2wr">
           <div style="display:flex;justify-content:flex-end;margin-bottom:1rem"><button class="btn bgr" onclick="dpAddFila()">+ Ítem</button></div>
-          <div class="rtable-wrap" style="max-height:500px;">
-            <table>
-              <thead><tr><th style="width:130px">Categoría</th><th style="width:140px">Tipo</th><th style="width:100px">Labor</th><th style="min-width:160px">Descripción</th><th style="width:110px">Ubicación</th><th style="width:140px">Equipo</th><th class="r" style="width:65px">Cant.</th><th class="r" style="width:100px">P.Unit.</th><th class="r" style="width:100px">Total</th><th style="text-align:center">—</th></tr></thead>
-              <tbody id="dpTbody"></tbody>
-            </table>
-          </div>
+          <div id="dpTbody" class="items-wrap"></div>
           <div class="tfoot"><div style="text-align:right;"><div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase;">Total</div><div class="tbv big" id="dpTot">$ 0.00</div></div></div>
         </div>
       </div>
