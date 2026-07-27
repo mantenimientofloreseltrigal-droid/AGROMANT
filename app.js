@@ -433,12 +433,29 @@ async function procesarItemsInvernaderoJS(items, fecha_ot) {
         fecha_eje_cambio: soloFecha(fecha), fecha_prog_cambio: soloFecha(pC), fecha_prog_lavado: soloFecha(pL), fecha_eje_lavado: null
       }).eq("id", bloque.id);
     } else if (esLavado) {
-      // El próximo lavado siempre rueda 6 meses desde la fecha REAL de este lavado
-      // (sin importar si se hizo antes o después de lo programado, y sin tope de conteo).
-      var pL2 = new Date(fecha); pL2.setMonth(pL2.getMonth() + 6);
-      await sb.from("invernaderos_bloques").update({
-        fecha_eje_lavado: soloFecha(fecha), fecha_prog_lavado: soloFecha(pL2)
-      }).eq("id", bloque.id);
+      // No confiar en "lo último que se procesó": si esta OT es más vieja que un lavado
+      // ya registrado, no debe pisarlo. Se recalcula fecha_eje_lavado como el lavado
+      // real MÁS RECIENTE (posterior al cambio) que exista en costos_mantenimiento.
+      var rC = await sb.from("costos_mantenimiento")
+        .select("fecha, ubicacion, sede_id, tipo, categorias!inner(nombre)")
+        .ilike("categorias.nombre", "%invernadero%").ilike("tipo", "%lavado%");
+      var lavados = (sbCheck(rC) || []).filter(function (c) { return String(c.tipo || "").toLowerCase().indexOf("cubiert") >= 0; });
+      var fEjeC = parseFechaJS(bloque.fecha_eje_cambio);
+      var fMasReciente = null;
+      lavados.forEach(function (c) {
+        if (String(c.sede_id || "").toUpperCase() !== sede) return;
+        if (String(c.ubicacion || "").trim().toLowerCase() !== ubic.toLowerCase()) return;
+        var fC = parseFechaJS(c.fecha);
+        if (!fC) return;
+        if (fEjeC && fC <= fEjeC) return;
+        if (!fMasReciente || fC > fMasReciente) fMasReciente = fC;
+      });
+      if (fMasReciente) {
+        var pL2 = new Date(fMasReciente); pL2.setMonth(pL2.getMonth() + 6);
+        await sb.from("invernaderos_bloques").update({
+          fecha_eje_lavado: soloFecha(fMasReciente), fecha_prog_lavado: soloFecha(pL2)
+        }).eq("id", bloque.id);
+      }
     }
   }
 }
