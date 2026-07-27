@@ -367,6 +367,8 @@ SB.getResumenInvernaderos = async function () {
   bloques.forEach(function (b) {
     var sede = b.sede_id, ubic = b.ubicacion;
     var fEjeCambio = parseFechaJS(b.fecha_eje_cambio);
+    var vidaUtil = parseFloat(b.vida_util_meses) || 24;
+    var lavadosMax = Math.max(1, Math.floor(vidaUtil / 6));
     var conteoReal = 0;
     costosLavado.forEach(function (c) {
       if (String(c.sede_id || "").toUpperCase() !== String(sede).toUpperCase()) return;
@@ -375,15 +377,16 @@ SB.getResumenInvernaderos = async function () {
       if (fEjeCambio && fCosto && fCosto <= fEjeCambio) return;
       conteoReal++;
     });
-    var reqCambio = conteoReal >= 3;
+    var reqCambio = conteoReal >= lavadosMax;
     var aC = alertaEstadoJS(parseFechaJS(b.fecha_prog_cambio), hoy);
-    var aL = reqCambio ? { estado: "cambio_req", label: "Requiere cambio (" + conteoReal + " lavados)", dias: 0 } : alertaEstadoJS(parseFechaJS(b.fecha_prog_lavado), hoy);
+    var aL = reqCambio ? { estado: "cambio_req", label: "Requiere cambio (" + conteoReal + "/" + lavadosMax + " lavados)", dias: 0 } : alertaEstadoJS(parseFechaJS(b.fecha_prog_lavado), hoy);
     var estados = [aC.estado, aL.estado];
     var global = estados.indexOf("vencido") >= 0 ? "vencido" : estados.indexOf("cambio_req") >= 0 ? "cambio_req" : estados.indexOf("proximo") >= 0 ? "proximo" : "ok";
     out.push({
-      sede: sede, ubicacion: ubic, num_naves: parseFloat(b.num_naves) || 0, num_medianave: parseFloat(b.num_medianave) || 0,
+      id: b.id, sede: sede, ubicacion: ubic, num_naves: parseFloat(b.num_naves) || 0, num_medianave: parseFloat(b.num_medianave) || 0,
       fecha_prog_cambio: soloFecha(b.fecha_prog_cambio), fecha_eje_cambio: soloFecha(b.fecha_eje_cambio),
       fecha_prog_lavado: soloFecha(b.fecha_prog_lavado), fecha_eje_lavado: soloFecha(b.fecha_eje_lavado),
+      vida_util_meses: vidaUtil, lavados_max: lavadosMax,
       conteo_lavados: conteoReal, requiere_cambio: reqCambio, alerta_cambio: aC, alerta_lavado: aL, alerta_global: global
     });
   });
@@ -413,8 +416,11 @@ async function procesarItemsInvernaderoJS(items, fecha_ot) {
     if (!bloque) continue;
     var fecha = parseFechaJS(fecha_ot) || new Date();
 
+    var vidaUtilBloque = parseFloat(bloque.vida_util_meses) || 24;
+    var lavadosMaxBloque = Math.max(1, Math.floor(vidaUtilBloque / 6));
+
     if (esCambio) {
-      var pC = new Date(fecha); pC.setFullYear(pC.getFullYear() + 2);
+      var pC = new Date(fecha); pC.setMonth(pC.getMonth() + vidaUtilBloque);
       var pL = new Date(fecha); pL.setMonth(pL.getMonth() + 6);
       await sb.from("invernaderos_bloques").update({
         fecha_eje_cambio: soloFecha(fecha), fecha_prog_cambio: soloFecha(pC), fecha_prog_lavado: soloFecha(pL), fecha_eje_lavado: null
@@ -435,12 +441,33 @@ async function procesarItemsInvernaderoJS(items, fecha_ot) {
       });
       var nuevoConteo = conteo + 1;
       var patch = { fecha_eje_lavado: soloFecha(fecha) };
-      if (nuevoConteo < 3) { var pL2 = new Date(fecha); pL2.setMonth(pL2.getMonth() + 6); patch.fecha_prog_lavado = soloFecha(pL2); }
+      if (nuevoConteo < lavadosMaxBloque) { var pL2 = new Date(fecha); pL2.setMonth(pL2.getMonth() + 6); patch.fecha_prog_lavado = soloFecha(pL2); }
       else { patch.fecha_prog_lavado = null; }
       await sb.from("invernaderos_bloques").update(patch).eq("id", bloque.id);
     }
   }
 }
+
+// Permite editar la vida útil del plástico de un bloque (ej: 24 -> 36 meses
+// para plásticos de 3 años). lavados_max se recalcula solo (vida_util/6).
+// Si el bloque ya tiene una fecha de instalación (fecha_eje_cambio), también
+// se recalcula fecha_prog_cambio con la nueva vida útil.
+SB.actualizarVidaUtilBloque = async function (args) {
+  var bloqueId = args && args.id, v = parseFloat(args && args.meses);
+  if (!bloqueId) throw new Error("Falta el bloque");
+  if (!v || v <= 0) throw new Error("La vida útil debe ser un número de meses mayor a 0");
+  var rB = await sb.from("invernaderos_bloques").select("*").eq("id", bloqueId).maybeSingle();
+  var bloque = sbCheck(rB);
+  if (!bloque) throw new Error("Bloque no encontrado");
+  var patch = { vida_util_meses: v };
+  var fEjeC = parseFechaJS(bloque.fecha_eje_cambio);
+  if (fEjeC) {
+    var pC = new Date(fEjeC); pC.setMonth(pC.getMonth() + v);
+    patch.fecha_prog_cambio = soloFecha(pC);
+  }
+  await sb.from("invernaderos_bloques").update(patch).eq("id", bloqueId);
+  return true;
+};
 
 // ---- ENERGÍA ----
 
@@ -1436,13 +1463,26 @@ function filtrarInv(){
     document.getElementById("invEmpty").style.display="none";
     invFiltrados.forEach(function(b){
       var tr=document.createElement("tr");
-      tr.innerHTML='<td>'+esc(b.sede)+'</td><td style="font-weight:600">'+esc(b.ubicacion)+'</td><td class="r">'+b.num_naves+'</td><td class="r">'+b.num_medianave+'</td><td class="mono">'+esc(b.fecha_prog_cambio||"—")+'</td><td class="mono">'+esc(b.fecha_eje_cambio||"—")+'</td><td><span class="inv-badge '+b.alerta_cambio.estado+'">'+esc(b.alerta_cambio.label)+'</span></td><td class="mono">'+esc(b.fecha_prog_lavado||"—")+'</td><td class="mono">'+esc(b.fecha_eje_lavado||"—")+'</td><td><span class="inv-badge '+b.alerta_lavado.estado+'">'+esc(b.alerta_lavado.label)+'</span></td><td style="text-align:center;font-weight:600;color:'+(b.conteo_lavados>=3?"var(--danger)":b.conteo_lavados>=2?"var(--warning)":"var(--text-main)")+'">'+b.conteo_lavados+'/3</td>';
+      tr.innerHTML='<td>'+esc(b.sede)+'</td><td style="font-weight:600">'+esc(b.ubicacion)+'</td><td class="r">'+b.num_naves+'</td><td class="r">'+b.num_medianave+'</td><td class="mono">'+esc(b.fecha_prog_cambio||"—")+'</td><td class="mono">'+esc(b.fecha_eje_cambio||"—")+'</td><td><span class="inv-badge '+b.alerta_cambio.estado+'">'+esc(b.alerta_cambio.label)+'</span></td><td class="mono">'+esc(b.fecha_prog_lavado||"—")+'</td><td class="mono">'+esc(b.fecha_eje_lavado||"—")+'</td><td><span class="inv-badge '+b.alerta_lavado.estado+'">'+esc(b.alerta_lavado.label)+'</span></td><td style="text-align:center;font-weight:600;color:'+(b.conteo_lavados>=b.lavados_max?"var(--danger)":b.conteo_lavados>=b.lavados_max-1?"var(--warning)":"var(--text-main)")+'">'+b.conteo_lavados+'/'+b.lavados_max+' <button class="btn bwn" style="padding:1px 6px;font-size:0.7rem;margin-left:4px;" title="Vida útil actual: '+b.vida_util_meses+' meses. Clic para editar." onclick=\"editarVidaUtilBloqueJS(\''+b.id+'\','+b.vida_util_meses+')\">✏</button></td>';
       tbody.appendChild(tr);
     });
   }
   var labels=invFiltrados.map(function(b){return b.ubicacion;});
   mkChart("chInvCambio","bar",labels,[{label:"Días",data:invFiltrados.map(function(b){return b.alerta_cambio.dias||0;}),backgroundColor:invFiltrados.map(function(b){var e=b.alerta_cambio.estado;return e==="vencido"?"#ef4444":e==="proximo"?"#f59e0b":"#10b981";}),borderRadius:4}],{indexAxis:"y"});
   mkChart("chInvLavado","bar",labels,[{label:"Días",data:invFiltrados.map(function(b){return b.requiere_cambio?0:b.alerta_lavado.dias||0;}),backgroundColor:invFiltrados.map(function(b){if(b.requiere_cambio)return "#8b5cf6";var e=b.alerta_lavado.estado;return e==="vencido"?"#ef4444":e==="proximo"?"#f59e0b":"#10b981";}),borderRadius:4}],{indexAxis:"y"});
+}
+// Edita la vida útil (en meses) del plástico de un bloque de invernadero.
+// Cada 6 meses se hace un lavado, así que el máximo de lavados permitidos
+// se recalcula solo como vida_util_meses/6 (24 -> 3 lavados, 36 -> 6 lavados, etc).
+function editarVidaUtilBloqueJS(bloqueId, actualMeses){
+  var v = prompt("Vida útil del plástico (en meses).\nCada 6 meses se hace un lavado: 24 meses = 3 lavados, 36 meses = 6 lavados.", actualMeses);
+  if(v===null) return;
+  v = parseFloat(v);
+  if(!v || v<=0 || v%6!==0){ toast("❌ Debe ser un número de meses múltiplo de 6 (24, 36, 48...)","err2"); return; }
+  gsr("actualizarVidaUtilBloque", {id: bloqueId, meses: v}, function(){
+    toast("✅ Vida útil actualizada a "+v+" meses ("+(v/6)+" lavados)","ok2");
+    cargarInvernaderos();
+  }, function(err){ toast("❌ "+err.message,"err2"); });
 }
 
 var invCostData=[], invCostFiltrados=[];
