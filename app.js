@@ -368,7 +368,9 @@ SB.getResumenInvernaderos = async function () {
     var sede = b.sede_id, ubic = b.ubicacion;
     var fEjeCambio = parseFechaJS(b.fecha_eje_cambio);
     var vidaUtil = parseFloat(b.vida_util_meses) || 24;
-    var lavadosMax = Math.max(1, Math.floor(vidaUtil / 6));
+    // Se lava cada 6 meses, pero el último ciclo de 6 meses es el cambio, no un lavado más.
+    // 24 meses -> lavados a 6/12/18, cambio a 24 => 3 lavados. 36 meses -> 5 lavados (6/12/18/24/30, cambio a 36).
+    var lavadosMax = Math.max(1, Math.floor(vidaUtil / 6) - 1);
     var conteoReal = 0;
     costosLavado.forEach(function (c) {
       if (String(c.sede_id || "").toUpperCase() !== String(sede).toUpperCase()) return;
@@ -417,7 +419,7 @@ async function procesarItemsInvernaderoJS(items, fecha_ot) {
     var fecha = parseFechaJS(fecha_ot) || new Date();
 
     var vidaUtilBloque = parseFloat(bloque.vida_util_meses) || 24;
-    var lavadosMaxBloque = Math.max(1, Math.floor(vidaUtilBloque / 6));
+    var lavadosMaxBloque = Math.max(1, Math.floor(vidaUtilBloque / 6) - 1);
 
     if (esCambio) {
       var pC = new Date(fecha); pC.setMonth(pC.getMonth() + vidaUtilBloque);
@@ -449,7 +451,8 @@ async function procesarItemsInvernaderoJS(items, fecha_ot) {
 }
 
 // Permite editar la vida útil del plástico de un bloque (ej: 24 -> 36 meses
-// para plásticos de 3 años). lavados_max se recalcula solo (vida_util/6).
+// para plásticos de 3 años). lavados_max se recalcula solo (vida_util/6 - 1;
+// el último ciclo de 6 meses es el cambio, no un lavado).
 // Si el bloque ya tiene una fecha de instalación (fecha_eje_cambio), también
 // se recalcula fecha_prog_cambio con la nueva vida útil.
 SB.actualizarVidaUtilBloque = async function (args) {
@@ -1473,14 +1476,15 @@ function filtrarInv(){
 }
 // Edita la vida útil (en meses) del plástico de un bloque de invernadero.
 // Cada 6 meses se hace un lavado, así que el máximo de lavados permitidos
-// se recalcula solo como vida_util_meses/6 (24 -> 3 lavados, 36 -> 6 lavados, etc).
+// se recalcula solo como vida_util_meses/6 - 1 (24 -> 3 lavados, 36 -> 5 lavados, etc;
+// el último ciclo de 6 meses de la vida útil es el cambio, no un lavado más).
 function editarVidaUtilBloqueJS(bloqueId, actualMeses){
-  var v = prompt("Vida útil del plástico (en meses).\nCada 6 meses se hace un lavado: 24 meses = 3 lavados, 36 meses = 6 lavados.", actualMeses);
+  var v = prompt("Vida útil del plástico (en meses).\nCada 6 meses se hace un lavado, salvo el último ciclo que es el cambio: 24 meses = 3 lavados, 36 meses = 5 lavados.", actualMeses);
   if(v===null) return;
   v = parseFloat(v);
   if(!v || v<=0 || v%6!==0){ toast("❌ Debe ser un número de meses múltiplo de 6 (24, 36, 48...)","err2"); return; }
   gsr("actualizarVidaUtilBloque", {id: bloqueId, meses: v}, function(){
-    toast("✅ Vida útil actualizada a "+v+" meses ("+(v/6)+" lavados)","ok2");
+    toast("✅ Vida útil actualizada a "+v+" meses ("+(v/6-1)+" lavados)","ok2");
     cargarInvernaderos();
   }, function(err){ toast("❌ "+err.message,"err2"); });
 }
