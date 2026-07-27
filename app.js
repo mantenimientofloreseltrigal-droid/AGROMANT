@@ -379,11 +379,15 @@ SB.getResumenInvernaderos = async function () {
       if (fEjeCambio && fCosto && fCosto <= fEjeCambio) return;
       conteoReal++;
     });
-    var reqCambio = conteoReal >= lavadosMax;
+    // El cambio es "sagrado" por fecha: se dispara únicamente cuando fecha_prog_cambio
+    // (fecha_eje_cambio + vida_util_meses) ya pasó, sin importar cuántos lavados se
+    // hayan hecho de más o de menos. conteo_lavados/lavados_max quedan solo informativos.
     var aC = alertaEstadoJS(parseFechaJS(b.fecha_prog_cambio), hoy);
-    var aL = reqCambio ? { estado: "cambio_req", label: "Requiere cambio (" + conteoReal + "/" + lavadosMax + " lavados)", dias: 0 } : alertaEstadoJS(parseFechaJS(b.fecha_prog_lavado), hoy);
+    var reqCambio = aC.estado === "vencido";
+    if (reqCambio) aC = { estado: "vencido", label: "Requiere cambio (vencido hace " + Math.abs(aC.dias) + " días)", dias: aC.dias };
+    var aL = alertaEstadoJS(parseFechaJS(b.fecha_prog_lavado), hoy);
     var estados = [aC.estado, aL.estado];
-    var global = estados.indexOf("vencido") >= 0 ? "vencido" : estados.indexOf("cambio_req") >= 0 ? "cambio_req" : estados.indexOf("proximo") >= 0 ? "proximo" : "ok";
+    var global = reqCambio ? "cambio_req" : (estados.indexOf("vencido") >= 0 ? "vencido" : estados.indexOf("proximo") >= 0 ? "proximo" : "ok");
     out.push({
       id: b.id, sede: sede, ubicacion: ubic, num_naves: parseFloat(b.num_naves) || 0, num_medianave: parseFloat(b.num_medianave) || 0,
       fecha_prog_cambio: soloFecha(b.fecha_prog_cambio), fecha_eje_cambio: soloFecha(b.fecha_eje_cambio),
@@ -419,33 +423,22 @@ async function procesarItemsInvernaderoJS(items, fecha_ot) {
     var fecha = parseFechaJS(fecha_ot) || new Date();
 
     var vidaUtilBloque = parseFloat(bloque.vida_util_meses) || 24;
-    var lavadosMaxBloque = Math.max(1, Math.floor(vidaUtilBloque / 6) - 1);
 
     if (esCambio) {
+      // Fecha de cambio: sagrada, se cuenta desde fecha_eje_cambio + vida_util_meses,
+      // sin importar cuántos lavados se hayan registrado antes.
       var pC = new Date(fecha); pC.setMonth(pC.getMonth() + vidaUtilBloque);
       var pL = new Date(fecha); pL.setMonth(pL.getMonth() + 6);
       await sb.from("invernaderos_bloques").update({
         fecha_eje_cambio: soloFecha(fecha), fecha_prog_cambio: soloFecha(pC), fecha_prog_lavado: soloFecha(pL), fecha_eje_lavado: null
       }).eq("id", bloque.id);
     } else if (esLavado) {
-      var rC = await sb.from("costos_mantenimiento")
-        .select("fecha, ubicacion, sede_id, tipo, categorias!inner(nombre)")
-        .ilike("categorias.nombre", "%invernadero%").ilike("tipo", "%lavado%");
-      var lavados = (sbCheck(rC) || []).filter(function (c) { return String(c.tipo || "").toLowerCase().indexOf("cubiert") >= 0; });
-      var fEjeC = parseFechaJS(bloque.fecha_eje_cambio);
-      var conteo = 0;
-      lavados.forEach(function (c) {
-        if (String(c.sede_id || "").toUpperCase() !== sede) return;
-        if (String(c.ubicacion || "").trim().toLowerCase() !== ubic.toLowerCase()) return;
-        var fC = parseFechaJS(c.fecha);
-        if (fEjeC && fC && fC <= fEjeC) return;
-        conteo++;
-      });
-      var nuevoConteo = conteo + 1;
-      var patch = { fecha_eje_lavado: soloFecha(fecha) };
-      if (nuevoConteo < lavadosMaxBloque) { var pL2 = new Date(fecha); pL2.setMonth(pL2.getMonth() + 6); patch.fecha_prog_lavado = soloFecha(pL2); }
-      else { patch.fecha_prog_lavado = null; }
-      await sb.from("invernaderos_bloques").update(patch).eq("id", bloque.id);
+      // El próximo lavado siempre rueda 6 meses desde la fecha REAL de este lavado
+      // (sin importar si se hizo antes o después de lo programado, y sin tope de conteo).
+      var pL2 = new Date(fecha); pL2.setMonth(pL2.getMonth() + 6);
+      await sb.from("invernaderos_bloques").update({
+        fecha_eje_lavado: soloFecha(fecha), fecha_prog_lavado: soloFecha(pL2)
+      }).eq("id", bloque.id);
     }
   }
 }
