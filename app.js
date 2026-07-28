@@ -265,6 +265,52 @@ SB.getCentrosCostos = async function () {
   });
 };
 
+SB.crearCentroCosto = async function (args) {
+  var id = String((args && args.id) || "").trim().toUpperCase();
+  var sede = sedeValida(args && args.sede);
+  if (!id) throw new Error("Falta el código del centro de costo");
+  if (!sede) throw new Error("Selecciona una sede válida");
+  var row = {
+    id: id,
+    sede_id: sede,
+    clasificacion: (args && args.clasificacion) || "MANTENIMIENTO",
+    descripcion: (args && args.descripcion) ? String(args.descripcion).trim() : null,
+    presupuesto: parseFloat(args && args.presupuesto) || 0
+  };
+  var r = await sb.from("centros_costos").insert(row);
+  if (r && r.error) {
+    if (r.error.code === "23505") throw new Error("Ya existe un centro de costo con ese código");
+    throw new Error(r.error.message);
+  }
+  return true;
+};
+
+SB.actualizarCentroCosto = async function (args) {
+  var id = args && args.id_original;
+  if (!id) throw new Error("Falta el centro de costo a editar");
+  var sede = sedeValida(args && args.sede);
+  if (!sede) throw new Error("Selecciona una sede válida");
+  var patch = {
+    sede_id: sede,
+    clasificacion: (args && args.clasificacion) || "MANTENIMIENTO",
+    descripcion: (args && args.descripcion) ? String(args.descripcion).trim() : null,
+    presupuesto: parseFloat(args && args.presupuesto) || 0
+  };
+  var r = await sb.from("centros_costos").update(patch).eq("id", id);
+  if (r && r.error) throw new Error(r.error.message);
+  return true;
+};
+
+SB.eliminarCentroCosto = async function (id) {
+  if (!id) throw new Error("Falta el centro de costo a eliminar");
+  var r = await sb.from("centros_costos").delete().eq("id", id);
+  if (r && r.error) {
+    if (r.error.code === "23503") throw new Error("No se puede eliminar: hay órdenes de trabajo o costos que usan este centro de costo");
+    throw new Error(r.error.message);
+  }
+  return true;
+};
+
 SB.getEquiposPorSede = async function (sede) {
   var q = sb.from("equipos").select("*");
   if (sede) q = q.eq("sede_id", sedeValida(sede) || sede);
@@ -368,9 +414,7 @@ SB.getResumenInvernaderos = async function () {
     var sede = b.sede_id, ubic = b.ubicacion;
     var fEjeCambio = parseFechaJS(b.fecha_eje_cambio);
     var vidaUtil = parseFloat(b.vida_util_meses) || 24;
-    // Se lava cada 6 meses, pero el último ciclo de 6 meses es el cambio, no un lavado más.
-    // 24 meses -> lavados a 6/12/18, cambio a 24 => 3 lavados. 36 meses -> 5 lavados (6/12/18/24/30, cambio a 36).
-    var lavadosMax = Math.max(1, Math.floor(vidaUtil / 6) - 1);
+    var lavadosMax = Math.max(1, Math.floor(vidaUtil / 6));
     var conteoReal = 0;
     costosLavado.forEach(function (c) {
       if (String(c.sede_id || "").toUpperCase() !== String(sede).toUpperCase()) return;
@@ -379,15 +423,11 @@ SB.getResumenInvernaderos = async function () {
       if (fEjeCambio && fCosto && fCosto <= fEjeCambio) return;
       conteoReal++;
     });
-    // El cambio es "sagrado" por fecha: se dispara únicamente cuando fecha_prog_cambio
-    // (fecha_eje_cambio + vida_util_meses) ya pasó, sin importar cuántos lavados se
-    // hayan hecho de más o de menos. conteo_lavados/lavados_max quedan solo informativos.
+    var reqCambio = conteoReal >= lavadosMax;
     var aC = alertaEstadoJS(parseFechaJS(b.fecha_prog_cambio), hoy);
-    var reqCambio = aC.estado === "vencido";
-    if (reqCambio) aC = { estado: "vencido", label: "Requiere cambio (vencido hace " + Math.abs(aC.dias) + " días)", dias: aC.dias };
-    var aL = alertaEstadoJS(parseFechaJS(b.fecha_prog_lavado), hoy);
+    var aL = reqCambio ? { estado: "cambio_req", label: "Requiere cambio (" + conteoReal + "/" + lavadosMax + " lavados)", dias: 0 } : alertaEstadoJS(parseFechaJS(b.fecha_prog_lavado), hoy);
     var estados = [aC.estado, aL.estado];
-    var global = reqCambio ? "cambio_req" : (estados.indexOf("vencido") >= 0 ? "vencido" : estados.indexOf("proximo") >= 0 ? "proximo" : "ok");
+    var global = estados.indexOf("vencido") >= 0 ? "vencido" : estados.indexOf("cambio_req") >= 0 ? "cambio_req" : estados.indexOf("proximo") >= 0 ? "proximo" : "ok";
     out.push({
       id: b.id, sede: sede, ubicacion: ubic, num_naves: parseFloat(b.num_naves) || 0, num_medianave: parseFloat(b.num_medianave) || 0,
       fecha_prog_cambio: soloFecha(b.fecha_prog_cambio), fecha_eje_cambio: soloFecha(b.fecha_eje_cambio),
@@ -423,46 +463,39 @@ async function procesarItemsInvernaderoJS(items, fecha_ot) {
     var fecha = parseFechaJS(fecha_ot) || new Date();
 
     var vidaUtilBloque = parseFloat(bloque.vida_util_meses) || 24;
+    var lavadosMaxBloque = Math.max(1, Math.floor(vidaUtilBloque / 6));
 
     if (esCambio) {
-      // Fecha de cambio: sagrada, se cuenta desde fecha_eje_cambio + vida_util_meses,
-      // sin importar cuántos lavados se hayan registrado antes.
       var pC = new Date(fecha); pC.setMonth(pC.getMonth() + vidaUtilBloque);
       var pL = new Date(fecha); pL.setMonth(pL.getMonth() + 6);
       await sb.from("invernaderos_bloques").update({
         fecha_eje_cambio: soloFecha(fecha), fecha_prog_cambio: soloFecha(pC), fecha_prog_lavado: soloFecha(pL), fecha_eje_lavado: null
       }).eq("id", bloque.id);
     } else if (esLavado) {
-      // No confiar en "lo último que se procesó": si esta OT es más vieja que un lavado
-      // ya registrado, no debe pisarlo. Se recalcula fecha_eje_lavado como el lavado
-      // real MÁS RECIENTE (posterior al cambio) que exista en costos_mantenimiento.
       var rC = await sb.from("costos_mantenimiento")
         .select("fecha, ubicacion, sede_id, tipo, categorias!inner(nombre)")
         .ilike("categorias.nombre", "%invernadero%").ilike("tipo", "%lavado%");
       var lavados = (sbCheck(rC) || []).filter(function (c) { return String(c.tipo || "").toLowerCase().indexOf("cubiert") >= 0; });
       var fEjeC = parseFechaJS(bloque.fecha_eje_cambio);
-      var fMasReciente = null;
+      var conteo = 0;
       lavados.forEach(function (c) {
         if (String(c.sede_id || "").toUpperCase() !== sede) return;
         if (String(c.ubicacion || "").trim().toLowerCase() !== ubic.toLowerCase()) return;
         var fC = parseFechaJS(c.fecha);
-        if (!fC) return;
-        if (fEjeC && fC <= fEjeC) return;
-        if (!fMasReciente || fC > fMasReciente) fMasReciente = fC;
+        if (fEjeC && fC && fC <= fEjeC) return;
+        conteo++;
       });
-      if (fMasReciente) {
-        var pL2 = new Date(fMasReciente); pL2.setMonth(pL2.getMonth() + 6);
-        await sb.from("invernaderos_bloques").update({
-          fecha_eje_lavado: soloFecha(fMasReciente), fecha_prog_lavado: soloFecha(pL2)
-        }).eq("id", bloque.id);
-      }
+      var nuevoConteo = conteo + 1;
+      var patch = { fecha_eje_lavado: soloFecha(fecha) };
+      if (nuevoConteo < lavadosMaxBloque) { var pL2 = new Date(fecha); pL2.setMonth(pL2.getMonth() + 6); patch.fecha_prog_lavado = soloFecha(pL2); }
+      else { patch.fecha_prog_lavado = null; }
+      await sb.from("invernaderos_bloques").update(patch).eq("id", bloque.id);
     }
   }
 }
 
 // Permite editar la vida útil del plástico de un bloque (ej: 24 -> 36 meses
-// para plásticos de 3 años). lavados_max se recalcula solo (vida_util/6 - 1;
-// el último ciclo de 6 meses es el cambio, no un lavado).
+// para plásticos de 3 años). lavados_max se recalcula solo (vida_util/6).
 // Si el bloque ya tiene una fecha de instalación (fecha_eje_cambio), también
 // se recalcula fecha_prog_cambio con la nueva vida útil.
 SB.actualizarVidaUtilBloque = async function (args) {
@@ -602,7 +635,8 @@ window.addEventListener("DOMContentLoaded",function(){
   }, function(){ renderAdmin(); });
   gsr("getCentrosCostos", null, function(data){
     centrosCostosData = Array.isArray(data) ? data : [];
-  }, function(){});
+    asegurarModalCC();
+  }, function(){ asegurarModalCC(); });
   cargarRegs();
   cargarAnalitica();
 });
@@ -1486,15 +1520,14 @@ function filtrarInv(){
 }
 // Edita la vida útil (en meses) del plástico de un bloque de invernadero.
 // Cada 6 meses se hace un lavado, así que el máximo de lavados permitidos
-// se recalcula solo como vida_util_meses/6 - 1 (24 -> 3 lavados, 36 -> 5 lavados, etc;
-// el último ciclo de 6 meses de la vida útil es el cambio, no un lavado más).
+// se recalcula solo como vida_util_meses/6 (24 -> 3 lavados, 36 -> 6 lavados, etc).
 function editarVidaUtilBloqueJS(bloqueId, actualMeses){
-  var v = prompt("Vida útil del plástico (en meses).\nCada 6 meses se hace un lavado, salvo el último ciclo que es el cambio: 24 meses = 3 lavados, 36 meses = 5 lavados.", actualMeses);
+  var v = prompt("Vida útil del plástico (en meses).\nCada 6 meses se hace un lavado: 24 meses = 3 lavados, 36 meses = 6 lavados.", actualMeses);
   if(v===null) return;
   v = parseFloat(v);
   if(!v || v<=0 || v%6!==0){ toast("❌ Debe ser un número de meses múltiplo de 6 (24, 36, 48...)","err2"); return; }
   gsr("actualizarVidaUtilBloque", {id: bloqueId, meses: v}, function(){
-    toast("✅ Vida útil actualizada a "+v+" meses ("+(v/6-1)+" lavados)","ok2");
+    toast("✅ Vida útil actualizada a "+v+" meses ("+(v/6)+" lavados)","ok2");
     cargarInvernaderos();
   }, function(err){ toast("❌ "+err.message,"err2"); });
 }
@@ -1969,4 +2002,206 @@ function confirmarCargaMasiva(){
     },
     function(err){ setB("btnCM","spCM","bCMt",false,"✅ Confirmar carga"); toast("❌ "+err.message,"err2"); }
   );
+}
+
+// ============================================================================
+//  GESTIÓN DE CENTROS DE COSTO — modal autocontenido (no depende de index.html)
+//  Se crea con JS puro (estructura + estilos) para poder desplegarse sin tocar
+//  el HTML. Se abre con el botón "+ Gestionar centros de costo" que aparece
+//  junto a los selects de Centro Costos (Nueva OT y Editar OT).
+// ============================================================================
+var ccModalInitDone = false;
+var ccFiltroSedeActual = "";
+
+function asegurarModalCC(){
+  if(ccModalInitDone) return;
+  ccModalInitDone = true;
+
+  if(!document.getElementById("cc-modal-style")){
+    var st = document.createElement("style");
+    st.id = "cc-modal-style";
+    st.textContent =
+      ".cc-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.5);backdrop-filter:blur(4px);z-index:2000;display:none;align-items:center;justify-content:center;padding:1rem;}" +
+      ".cc-modal-overlay.open{display:flex;}" +
+      ".cc-modal-card{background:var(--bg-card);border:1px solid var(--border-color);border-radius:var(--radius-md);width:100%;max-width:760px;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 10px 40px rgba(0,0,0,.25);}" +
+      ".cc-modal-body{padding:1.25rem;overflow-y:auto;flex:1;}" +
+      ".cc-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;}" +
+      "@media (max-width:640px){.cc-form-grid{grid-template-columns:1fr;}}";
+    document.head.appendChild(st);
+  }
+
+  var wrap = document.createElement("div");
+  wrap.innerHTML =
+    '<div class="cc-modal-overlay" id="ccModalOverlay">' +
+      '<div class="cc-modal-card">' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;padding:1rem 1.25rem;border-bottom:1px solid var(--border-color);">' +
+          '<div style="font-size:1rem;font-weight:600;color:var(--text-main);">Centros de Costo</div>' +
+          '<button type="button" class="btn brd" id="ccBtnCerrar" style="padding:4px 10px;">✕</button>' +
+        '</div>' +
+        '<div class="cc-modal-body">' +
+          '<div id="ccFormBox" style="background:var(--bg-hover);border:1px solid var(--border-color);border-radius:var(--radius-sm);padding:1rem;margin-bottom:1.25rem;">' +
+            '<div style="font-size:0.875rem;font-weight:600;margin-bottom:0.75rem;" id="ccFormTitulo">Nuevo centro de costo</div>' +
+            '<input type="hidden" id="cc_id_original" value="">' +
+            '<div class="cc-form-grid">' +
+              '<div><label>Código</label><input class="inp" id="cc_f_id" placeholder="ej: OL2517"></div>' +
+              '<div><label>Sede</label><select class="inp" id="cc_f_sede"><option value="">— Selecciona —</option><option value="MANANTIALES">MANANTIALES</option><option value="OLAS">OLAS</option></select></div>' +
+              '<div><label>Descripción</label><input class="inp" id="cc_f_desc" placeholder="opcional"></div>' +
+              '<div><label>Presupuesto</label><input class="inp" id="cc_f_presu" type="number" step="0.01" placeholder="opcional"></div>' +
+              '<div><label>Clasificación</label><select class="inp" id="cc_f_clas"><option value="MANTENIMIENTO">Mantenimiento</option><option value="PROYECTO DE INVERSION">Proyecto de inversión</option></select></div>' +
+            '</div>' +
+            '<div style="margin-top:0.75rem;display:flex;gap:0.5rem;">' +
+              '<button type="button" class="btn bbl" id="ccBtnGuardar">Guardar</button>' +
+              '<button type="button" class="btn brd" id="cc_btn_cancelar" style="display:none;">Cancelar edición</button>' +
+            '</div>' +
+          '</div>' +
+          '<div id="ccSedeBtns" style="display:flex;gap:0.5rem;margin-bottom:0.75rem;flex-wrap:wrap;"></div>' +
+          '<div style="overflow-x:auto;">' +
+            '<table style="width:100%;">' +
+              '<thead><tr><th>Código</th><th>Sede</th><th>Descripción</th><th class="r">Presupuesto</th><th>Clasificación</th><th></th></tr></thead>' +
+              '<tbody id="ccTablaBody"></tbody>' +
+            '</table>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(wrap.firstChild);
+
+  document.getElementById("ccBtnCerrar").addEventListener("click", cerrarModalCC);
+  document.getElementById("ccBtnGuardar").addEventListener("click", guardarCC);
+  document.getElementById("cc_btn_cancelar").addEventListener("click", limpiarFormCC);
+  document.getElementById("ccModalOverlay").addEventListener("click", function(e){
+    if(e.target.id === "ccModalOverlay") cerrarModalCC();
+  });
+
+  // Botón "+ Gestionar centros de costo" junto a los selects existentes
+  [["cc"],["de_cc"]].forEach(function(par){
+    var sel = document.getElementById(par[0]);
+    if(sel && !document.getElementById(par[0]+"_btnCC")){
+      var b = document.createElement("button");
+      b.type = "button"; b.id = par[0]+"_btnCC"; b.className = "btn brd";
+      b.style.cssText = "margin-top:0.4rem;font-size:0.7rem;padding:3px 8px;";
+      b.textContent = "+ Gestionar centros de costo";
+      b.addEventListener("click", function(){ abrirModalCC(); });
+      sel.insertAdjacentElement("afterend", b);
+    }
+  });
+}
+
+function abrirModalCC(){
+  asegurarModalCC();
+  document.getElementById("ccModalOverlay").classList.add("open");
+  limpiarFormCC();
+  renderCCSedeBtns();
+  renderTablaCC();
+  gsr("getCentrosCostos", null, function(data){
+    centrosCostosData = Array.isArray(data) ? data : [];
+    renderTablaCC();
+  }, function(err){ toast("❌ "+err.message,"err2"); });
+}
+
+function cerrarModalCC(){
+  var ov = document.getElementById("ccModalOverlay");
+  if(ov) ov.classList.remove("open");
+}
+
+function renderCCSedeBtns(){
+  var cont = document.getElementById("ccSedeBtns");
+  if(!cont) return;
+  cont.innerHTML = "";
+  [["", "Todas"], ["MANANTIALES", "Manantiales"], ["OLAS", "Olas"]].forEach(function(op){
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "atab" + ((ccFiltroSedeActual||"") === op[0] ? " on" : "");
+    btn.textContent = op[1];
+    btn.addEventListener("click", function(){ ccFiltroSedeActual = op[0]; renderCCSedeBtns(); renderTablaCC(); });
+    cont.appendChild(btn);
+  });
+}
+
+function renderTablaCC(){
+  var tbody = document.getElementById("ccTablaBody");
+  if(!tbody) return;
+  var filtro = ccFiltroSedeActual || "";
+  var filtrados = (centrosCostosData||[]).filter(function(c){ return !filtro || c.sede === filtro; })
+    .slice().sort(function(a,b){ return String(a.id).localeCompare(String(b.id)); });
+  tbody.innerHTML = "";
+  if(!filtrados.length){
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:1.5rem;">Sin centros de costo'+(filtro?(" en "+esc(filtro)):"")+'</td></tr>';
+    return;
+  }
+  filtrados.forEach(function(c){
+    var tr = document.createElement("tr");
+    tr.innerHTML =
+      '<td class="mono" style="font-weight:600;">'+esc(c.id)+'</td>'+
+      '<td>'+esc(c.sede||"—")+'</td>'+
+      '<td>'+esc(c.descripcion||"—")+'</td>'+
+      '<td class="r">'+fmtCOP(c.presupuesto||0)+'</td>'+
+      '<td>'+esc(c.clasificacion||"—")+'</td>'+
+      '<td style="text-align:center;"><div style="display:flex;gap:0.25rem;justify-content:center;"><button type="button" class="btn bwn cc-edit-btn" style="padding:3px 8px;font-size:0.7rem;">✏</button><button type="button" class="btn brd cc-del-btn" style="padding:3px 8px;font-size:0.7rem;">🗑</button></div></td>';
+    tr.querySelector(".cc-edit-btn").addEventListener("click", function(){ cargarCCEnForm(c); });
+    tr.querySelector(".cc-del-btn").addEventListener("click", function(){ eliminarCC(c.id); });
+    tbody.appendChild(tr);
+  });
+}
+
+function limpiarFormCC(){
+  document.getElementById("cc_id_original").value = "";
+  var fid = document.getElementById("cc_f_id"); fid.value = ""; fid.disabled = false;
+  document.getElementById("cc_f_sede").value = "";
+  document.getElementById("cc_f_desc").value = "";
+  document.getElementById("cc_f_presu").value = "";
+  document.getElementById("cc_f_clas").value = "MANTENIMIENTO";
+  document.getElementById("ccFormTitulo").textContent = "Nuevo centro de costo";
+  document.getElementById("cc_btn_cancelar").style.display = "none";
+}
+
+function cargarCCEnForm(c){
+  document.getElementById("cc_id_original").value = c.id;
+  var fid = document.getElementById("cc_f_id"); fid.value = c.id; fid.disabled = true;
+  document.getElementById("cc_f_sede").value = c.sede || "";
+  document.getElementById("cc_f_desc").value = c.descripcion || "";
+  document.getElementById("cc_f_presu").value = c.presupuesto || "";
+  document.getElementById("cc_f_clas").value = c.clasificacion || "MANTENIMIENTO";
+  document.getElementById("ccFormTitulo").textContent = "Editando "+c.id;
+  document.getElementById("cc_btn_cancelar").style.display = "inline-block";
+  document.getElementById("ccFormBox").scrollIntoView({behavior:"smooth", block:"start"});
+}
+
+function guardarCC(){
+  var idOriginal = document.getElementById("cc_id_original").value;
+  var id = document.getElementById("cc_f_id").value.trim().toUpperCase();
+  var sede = document.getElementById("cc_f_sede").value;
+  var desc = document.getElementById("cc_f_desc").value.trim();
+  var presu = document.getElementById("cc_f_presu").value;
+  var clas = document.getElementById("cc_f_clas").value;
+  if(!sede){ toast("⚠️ Selecciona la sede","wn2"); return; }
+  if(!idOriginal && !id){ toast("⚠️ Falta el código","wn2"); return; }
+
+  if(idOriginal){
+    gsr("actualizarCentroCosto", {id_original:idOriginal, sede:sede, descripcion:desc, presupuesto:presu, clasificacion:clas}, function(){
+      toast("✅ Centro de costo actualizado","ok2");
+      limpiarFormCC(); recargarCCTodo();
+    }, function(err){ toast("❌ "+err.message,"err2"); });
+  } else {
+    gsr("crearCentroCosto", {id:id, sede:sede, descripcion:desc, presupuesto:presu, clasificacion:clas}, function(){
+      toast("✅ Centro de costo creado","ok2");
+      limpiarFormCC(); recargarCCTodo();
+    }, function(err){ toast("❌ "+err.message,"err2"); });
+  }
+}
+
+function eliminarCC(id){
+  if(!confirm('¿Eliminar el centro de costo "'+id+'"? Solo funciona si no tiene OTs ni costos asociados.')) return;
+  gsr("eliminarCentroCosto", id, function(){
+    toast("🗑 Eliminado","ok2"); recargarCCTodo();
+  }, function(err){ toast("❌ "+err.message,"err2"); });
+}
+
+function recargarCCTodo(){
+  gsr("getCentrosCostos", null, function(data){
+    centrosCostosData = Array.isArray(data) ? data : [];
+    renderTablaCC();
+    if(document.getElementById("sede") && document.getElementById("sede").value) onSedeChange();
+    if(document.getElementById("de_sede") && document.getElementById("de_sede").value) onDeSedeChange();
+  }, function(){});
 }
